@@ -3,3 +3,4 @@
 .derived-data/*
 .xcode-results/*
 .swift-module-cache/*
+/RadFlag.xcodeproj/project.xcworkspace/xcuserdata/*.xcuserdatad
