@@ -1,6 +1,10 @@
+build/
+DerivedData/
 .DS_Store
 .derived-data-test/*
 .derived-data/*
 .xcode-results/*
 .swift-module-cache/*
-/RadFlag.xcodeproj/project.xcworkspace/xcuserdata/*.xcuserdatad
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
