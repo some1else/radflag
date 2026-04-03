@@ -23,7 +23,7 @@ struct SettingsView: View {
                         step: 0.05
                     )
 
-                    Text("Alerts fire when the recent 15-minute average is at least this multiple of the baseline.")
+                    Text("Load alerts fire when the recent 5-minute average is at least this multiple of the baseline.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -58,7 +58,7 @@ struct SettingsView: View {
             }
 
             Section("Fixed v1 defaults") {
-                Text("Checks run every minute, repeated alerts are capped at every 15 minutes, and muting lasts 1 hour from the menu bar.")
+                Text("Checks run every 20 seconds, process alerts trigger after 5 minutes over 100% CPU, repeated alerts are capped at every 5 minutes, and muting lasts 20 minutes.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

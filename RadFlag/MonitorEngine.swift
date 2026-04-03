@@ -1,27 +1,41 @@
+import Darwin
 import Foundation
 
 final class MonitorEngine {
+    static let sampleInterval: TimeInterval = 20
     static let maxSamples = 120
     static let recentWindowSize = 15
     static let minimumSampleCount = 30
+    static let processWindowSize = 15
+    static let minimumProcessSampleCount = processWindowSize + 1
     static let clearRatio = 1.3
     static let minimumRecentAverage = 1.0
-    static let repeatInterval: TimeInterval = 15 * 60
-    static let muteInterval: TimeInterval = 60 * 60
+    static let processCPUThreshold = 100.0
+    static let repeatInterval: TimeInterval = 5 * 60
+    static let muteInterval: TimeInterval = 20 * 60
     private static let baselineFloor = 0.01
+    private static let nanosecondsPerSecond = 1_000_000_000.0
 
     private(set) var samples: [LoadSample] = []
     private(set) var snapshot: MonitorSnapshot = .empty
+    private var processHistories: [pid_t: ProcessHistory] = [:]
 
-    func processSample(load15: Double, powerSource: PowerSource, at date: Date, settings: MonitorSettings) -> MonitorUpdate {
-        let sample = LoadSample(timestamp: date, load15: load15, powerSource: powerSource)
+    func processSample(
+        loadAverage: Double,
+        powerSource: PowerSource,
+        processSnapshots: [ProcessCPUSnapshot],
+        at date: Date,
+        settings: MonitorSettings
+    ) -> MonitorUpdate {
+        let sample = LoadSample(timestamp: date, loadAverage: loadAverage, powerSource: powerSource)
         samples.append(sample)
         if samples.count > Self.maxSamples {
             samples.removeFirst(samples.count - Self.maxSamples)
         }
 
-        let metrics = buildMetrics()
-        let update = updateState(using: metrics, at: date, settings: settings)
+        let loadMetrics = buildLoadMetrics()
+        let processOffender = updateProcessHistories(with: processSnapshots, at: date)
+        let update = updateState(using: loadMetrics, processOffender: processOffender, at: date, settings: settings)
         snapshot = update.snapshot
         return update
     }
@@ -46,7 +60,12 @@ final class MonitorEngine {
         return snapshot
     }
 
-    private func updateState(using metrics: WindowMetrics, at date: Date, settings: MonitorSettings) -> MonitorUpdate {
+    private func updateState(
+        using loadMetrics: LoadMetrics,
+        processOffender: ProcessOffender?,
+        at date: Date,
+        settings: MonitorSettings
+    ) -> MonitorUpdate {
         var nextAlertState = snapshot.alertState
         var lastAlertDate = snapshot.lastAlertDate
         var notification: NotificationRequest?
@@ -55,65 +74,71 @@ final class MonitorEngine {
             nextAlertState = .high
         }
 
-        if !metrics.canEvaluate || metrics.powerSource != .battery {
+        let loadIsActive = loadMetrics.powerSource == .battery
+            && loadMetrics.meetsThreshold(
+                thresholdRatio: settings.thresholdRatio,
+                isAlreadyElevated: snapshot.alertState.isElevated
+            )
+        let processIsActive = loadMetrics.powerSource == .battery && processOffender != nil
+        let triggerReason = AlertTriggerReason(loadActive: loadIsActive, processActive: processIsActive)
+
+        if loadMetrics.powerSource != .battery || triggerReason == nil {
             nextAlertState = .ok
         } else {
             switch nextAlertState {
             case .ok:
-                if metrics.meetsTriggerThreshold(thresholdRatio: settings.thresholdRatio) {
-                    nextAlertState = .high
-                    lastAlertDate = date
-                    notification = NotificationRequest(kind: .enteredHigh, timestamp: date)
-                }
+                nextAlertState = .high
+                lastAlertDate = date
+                notification = NotificationRequest(kind: .enteredHigh, timestamp: date)
             case .high:
-                if metrics.meetsClearThreshold {
+                if shouldSendRepeatNotification(now: date, lastAlertDate: lastAlertDate) {
+                    lastAlertDate = date
+                    notification = NotificationRequest(kind: .repeatedHigh, timestamp: date)
+                }
+            case let .muted(until):
+                if date >= until {
+                    nextAlertState = .high
                     if shouldSendRepeatNotification(now: date, lastAlertDate: lastAlertDate) {
                         lastAlertDate = date
                         notification = NotificationRequest(kind: .repeatedHigh, timestamp: date)
                     }
                 } else {
-                    nextAlertState = .ok
-                }
-            case let .muted(until):
-                if metrics.meetsClearThreshold {
-                    if date >= until {
-                        nextAlertState = .high
-                        if shouldSendRepeatNotification(now: date, lastAlertDate: lastAlertDate) {
-                            lastAlertDate = date
-                            notification = NotificationRequest(kind: .repeatedHigh, timestamp: date)
-                        }
-                    } else {
-                        nextAlertState = .muted(until: until)
-                    }
-                } else {
-                    nextAlertState = .ok
+                    nextAlertState = .muted(until: until)
                 }
             }
         }
 
         let nextSnapshot = MonitorSnapshot(
-            latestSample: metrics.latestSample,
-            recentAverage: metrics.recentAverage,
-            baselineAverage: metrics.baselineAverage,
-            ratio: metrics.ratio,
-            sampleCount: metrics.sampleCount,
+            latestSample: loadMetrics.latestSample,
+            recentAverage: loadMetrics.recentAverage,
+            baselineAverage: loadMetrics.baselineAverage,
+            ratio: loadMetrics.ratio,
+            processOffender: triggerReason == nil ? nil : processOffender,
+            triggerReason: triggerReason,
+            sampleCount: loadMetrics.sampleCount,
             alertState: nextAlertState,
             lastAlertDate: lastAlertDate,
-            isWarmingUp: !metrics.canEvaluate
+            isWarmingUp: !loadMetrics.canEvaluate
         )
 
         return MonitorUpdate(snapshot: nextSnapshot, notification: notification)
     }
 
-    private func buildMetrics() -> WindowMetrics {
+    private func buildLoadMetrics() -> LoadMetrics {
         let latestSample = samples.last
         let recentSamples = Array(samples.suffix(Self.recentWindowSize))
-        let baselineSamples = Array(samples.dropLast(min(Self.recentWindowSize, samples.count)).suffix(Self.maxSamples - Self.recentWindowSize))
+        let baselineSamples = Array(
+            samples
+                .dropLast(min(Self.recentWindowSize, samples.count))
+                .suffix(Self.maxSamples - Self.recentWindowSize)
+        )
 
         let recentAverage = average(for: recentSamples)
         let baselineAverage = average(for: baselineSamples)
         let ratio = baselineAverage.map { baseline -> Double in
-            guard let recentAverage else { return 0 }
+            guard let recentAverage else {
+                return 0
+            }
             return recentAverage / max(baseline, Self.baselineFloor)
         }
 
@@ -122,7 +147,7 @@ final class MonitorEngine {
             && !baselineSamples.isEmpty
             && ratio != nil
 
-        return WindowMetrics(
+        return LoadMetrics(
             latestSample: latestSample,
             recentAverage: recentAverage,
             baselineAverage: baselineAverage,
@@ -133,12 +158,74 @@ final class MonitorEngine {
         )
     }
 
+    private func updateProcessHistories(with snapshots: [ProcessCPUSnapshot], at date: Date) -> ProcessOffender? {
+        var nextHistories: [pid_t: ProcessHistory] = [:]
+
+        for snapshot in snapshots where snapshot.pid > 0 {
+            var history = processHistories[snapshot.pid] ?? ProcessHistory(
+                name: snapshot.name,
+                lastTotalCPUTime: nil,
+                lastTimestamp: nil,
+                cpuSamples: []
+            )
+            history.name = snapshot.name
+
+            if let lastTotalCPUTime = history.lastTotalCPUTime, let lastTimestamp = history.lastTimestamp {
+                let elapsed = date.timeIntervalSince(lastTimestamp)
+                if snapshot.totalCPUTime >= lastTotalCPUTime && elapsed > 0 {
+                    let delta = snapshot.totalCPUTime - lastTotalCPUTime
+                    history.cpuSamples.append(
+                        ProcessCPUSample(
+                            timestamp: date,
+                            cpuPercent: cpuPercent(deltaCPUTime: delta, elapsed: elapsed)
+                        )
+                    )
+                    if history.cpuSamples.count > Self.processWindowSize {
+                        history.cpuSamples.removeFirst(history.cpuSamples.count - Self.processWindowSize)
+                    }
+                } else if snapshot.totalCPUTime < lastTotalCPUTime {
+                    history.cpuSamples.removeAll()
+                }
+            }
+
+            history.lastTotalCPUTime = snapshot.totalCPUTime
+            history.lastTimestamp = date
+            nextHistories[snapshot.pid] = history
+        }
+
+        processHistories = nextHistories
+        return topProcessOffender(in: nextHistories)
+    }
+
+    private func topProcessOffender(in histories: [pid_t: ProcessHistory]) -> ProcessOffender? {
+        histories.reduce(into: nil as ProcessOffender?) { best, entry in
+            let (pid, history) = entry
+            guard history.cpuSamples.count >= Self.processWindowSize else {
+                return
+            }
+
+            let averageCPUPercent = history.cpuSamples.reduce(0) { $0 + $1.cpuPercent } / Double(history.cpuSamples.count)
+            guard averageCPUPercent > Self.processCPUThreshold else {
+                return
+            }
+
+            if best == nil || averageCPUPercent > best!.averageCPUPercent {
+                best = ProcessOffender(pid: pid, name: history.name, averageCPUPercent: averageCPUPercent)
+            }
+        }
+    }
+
     private func average(for samples: [LoadSample]) -> Double? {
         guard !samples.isEmpty else {
             return nil
         }
-        let total = samples.reduce(0) { $0 + $1.load15 }
+
+        let total = samples.reduce(0) { $0 + $1.loadAverage }
         return total / Double(samples.count)
+    }
+
+    private func cpuPercent(deltaCPUTime: UInt64, elapsed: TimeInterval) -> Double {
+        (Double(deltaCPUTime) / Self.nanosecondsPerSecond) / elapsed * 100
     }
 
     private func shouldSendRepeatNotification(now: Date, lastAlertDate: Date?) -> Bool {
@@ -149,7 +236,7 @@ final class MonitorEngine {
     }
 }
 
-private struct WindowMetrics {
+private struct LoadMetrics {
     let latestSample: LoadSample?
     let recentAverage: Double?
     let baselineAverage: Double?
@@ -158,19 +245,22 @@ private struct WindowMetrics {
     let powerSource: PowerSource
     let canEvaluate: Bool
 
-    func meetsTriggerThreshold(thresholdRatio: Double) -> Bool {
+    func meetsThreshold(thresholdRatio: Double, isAlreadyElevated: Bool) -> Bool {
         guard canEvaluate, let recentAverage, let ratio else {
             return false
         }
 
-        return recentAverage >= MonitorEngine.minimumRecentAverage && ratio >= thresholdRatio
-    }
-
-    var meetsClearThreshold: Bool {
-        guard canEvaluate, let recentAverage, let ratio else {
+        if recentAverage < MonitorEngine.minimumRecentAverage {
             return false
         }
 
-        return recentAverage >= MonitorEngine.minimumRecentAverage && ratio >= MonitorEngine.clearRatio
+        return ratio >= (isAlreadyElevated ? MonitorEngine.clearRatio : thresholdRatio)
     }
+}
+
+private struct ProcessHistory {
+    var name: String
+    var lastTotalCPUTime: UInt64?
+    var lastTimestamp: Date?
+    var cpuSamples: [ProcessCPUSample]
 }

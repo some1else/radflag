@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     private let engine: MonitorEngine
     private let loadProvider: LoadAverageProvider
     private let powerProvider: PowerSourceProvider
+    private let processSnapshotProvider: ProcessSnapshotProvider
     private let notificationCoordinator: NotificationCoordinating
     private let settingsStore: MonitorSettingsStore
     private var timer: Timer?
@@ -23,12 +24,14 @@ final class AppModel: ObservableObject {
         engine: MonitorEngine = MonitorEngine(),
         loadProvider: LoadAverageProvider = SystemLoadAverageProvider(),
         powerProvider: PowerSourceProvider = SystemPowerSourceProvider(),
+        processSnapshotProvider: ProcessSnapshotProvider = SystemProcessSnapshotProvider(),
         notificationCoordinator: NotificationCoordinating? = nil,
         settingsStore: MonitorSettingsStore = MonitorSettingsStore()
     ) {
         self.engine = engine
         self.loadProvider = loadProvider
         self.powerProvider = powerProvider
+        self.processSnapshotProvider = processSnapshotProvider
         self.settingsStore = settingsStore
         self.settings = settingsStore.load()
         self.snapshot = engine.snapshot
@@ -44,7 +47,7 @@ final class AppModel: ObservableObject {
     }
 
     var menuBarTitle: String {
-        "15m \(formattedNumber(snapshot.latestSample?.load15)) \(statusText)"
+        "5m \(formattedNumber(snapshot.latestSample?.loadAverage)) \(statusText)"
     }
 
     var statusText: String {
@@ -56,7 +59,7 @@ final class AppModel: ObservableObject {
     }
 
     var currentLoadText: String {
-        formattedNumber(snapshot.latestSample?.load15)
+        formattedNumber(snapshot.latestSample?.loadAverage)
     }
 
     var recentAverageText: String {
@@ -78,6 +81,25 @@ final class AppModel: ObservableObject {
         snapshot.latestSample?.powerSource.displayName ?? PowerSource.unknown.displayName
     }
 
+    var triggerReasonText: String {
+        snapshot.triggerReason?.displayName ?? "--"
+    }
+
+    var offenderText: String {
+        snapshot.processOffender?.displayName ?? "--"
+    }
+
+    var offenderCPUText: String {
+        guard let offender = snapshot.processOffender else {
+            return "--"
+        }
+        return String(format: "%.0f%%", offender.averageCPUPercent)
+    }
+
+    var hasProcessOffender: Bool {
+        snapshot.processOffender != nil
+    }
+
     var lastAlertText: String {
         guard let lastAlertDate = snapshot.lastAlertDate else {
             return "Never"
@@ -87,7 +109,7 @@ final class AppModel: ObservableObject {
     }
 
     var muteButtonTitle: String {
-        isMuted ? "Unmute" : "Mute for 1 hour"
+        isMuted ? "Unmute" : "Mute for 20 minutes"
     }
 
     var canToggleMute: Bool {
@@ -103,11 +125,17 @@ final class AppModel: ObservableObject {
 
     var warmupText: String {
         guard snapshot.isWarmingUp else {
-            return "Monitoring with a 15-minute recent window against the prior 105 minutes."
+            return "Monitoring the last 5 minutes against the prior 35 minutes. Rogue-process detection uses a rolling 5-minute CPU window."
         }
 
-        let remainingSamples = max(0, MonitorEngine.minimumSampleCount - snapshot.sampleCount)
-        return "Warming up baseline. \(remainingSamples) more minute sample(s) needed before alerts."
+        let remainingProcessSamples = max(0, MonitorEngine.minimumProcessSampleCount - snapshot.sampleCount)
+        let remainingLoadSamples = max(0, MonitorEngine.minimumSampleCount - snapshot.sampleCount)
+
+        if remainingProcessSamples > 0 {
+            return "Rogue-process detection arms in \(remainingProcessSamples) more sample(s); load baseline in \(remainingLoadSamples) more."
+        }
+
+        return "Rogue-process detection is live. Load baseline warms for \(remainingLoadSamples) more sample(s)."
     }
 
     func updateThresholdRatio(_ ratio: Double) {
@@ -132,13 +160,14 @@ final class AppModel: ObservableObject {
     }
 
     func sampleNow() {
-        guard let load15 = loadProvider.currentLoadAverage() else {
+        guard let loadAverage = loadProvider.currentLoadAverage() else {
             return
         }
 
         let update = engine.processSample(
-            load15: load15,
+            loadAverage: loadAverage,
             powerSource: powerProvider.currentPowerSource(),
+            processSnapshots: processSnapshotProvider.currentProcessSnapshots(),
             at: Date(),
             settings: settings
         )
@@ -155,12 +184,12 @@ final class AppModel: ObservableObject {
 
     private func startMonitoring() {
         sampleNow()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: MonitorEngine.sampleInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.sampleNow()
             }
         }
-        timer?.tolerance = 5
+        timer?.tolerance = 2
     }
 
     private func syncLaunchAtLogin(enabled: Bool) {

@@ -21,27 +21,13 @@ final class NotificationCoordinator: NotificationCoordinating {
     }
 
     func sendAlert(for snapshot: MonitorSnapshot, kind: NotificationKind, soundEnabled: Bool) {
-        guard
-            let recentAverage = snapshot.recentAverage,
-            let baselineAverage = snapshot.baselineAverage,
-            let ratio = snapshot.ratio
-        else {
+        guard let triggerReason = snapshot.triggerReason else {
             return
         }
 
         let content = UNMutableNotificationContent()
-        switch kind {
-        case .enteredHigh:
-            content.title = "Load Watcher: high load on battery"
-        case .repeatedHigh:
-            content.title = "Load Watcher: still high on battery"
-        }
-        content.body = String(
-            format: "15m load %.2f vs baseline %.2f (%.2fx).",
-            recentAverage,
-            baselineAverage,
-            ratio
-        )
+        content.title = title(for: triggerReason, kind: kind)
+        content.body = body(for: snapshot, triggerReason: triggerReason)
         content.sound = soundEnabled ? .default : nil
 
         let request = UNNotificationRequest(
@@ -52,5 +38,59 @@ final class NotificationCoordinator: NotificationCoordinating {
 
         center.add(request) { _ in
         }
+    }
+
+    private func title(for triggerReason: AlertTriggerReason, kind: NotificationKind) -> String {
+        switch (triggerReason, kind) {
+        case (.load, .enteredHigh):
+            return "RadFlag: high 5-minute load on battery"
+        case (.load, .repeatedHigh):
+            return "RadFlag: load still high on battery"
+        case (.process, .enteredHigh):
+            return "RadFlag: rogue process on battery"
+        case (.process, .repeatedHigh):
+            return "RadFlag: process still burning CPU"
+        case (.loadAndProcess, .enteredHigh):
+            return "RadFlag: load spike and rogue process"
+        case (.loadAndProcess, .repeatedHigh):
+            return "RadFlag: load and process still elevated"
+        }
+    }
+
+    private func body(for snapshot: MonitorSnapshot, triggerReason: AlertTriggerReason) -> String {
+        var segments: [String] = []
+
+        if triggerReason == .load || triggerReason == .loadAndProcess {
+            if
+                let recentAverage = snapshot.recentAverage,
+                let baselineAverage = snapshot.baselineAverage,
+                let ratio = snapshot.ratio
+            {
+                segments.append(
+                    String(
+                        format: "5m load %.2f vs baseline %.2f (%.2fx).",
+                        recentAverage,
+                        baselineAverage,
+                        ratio
+                    )
+                )
+            }
+        }
+
+        if
+            (triggerReason == .process || triggerReason == .loadAndProcess),
+            let processOffender = snapshot.processOffender
+        {
+            segments.append(
+                String(
+                    format: "%@ (pid %d) averaged %.0f%% CPU over the last 5 minutes.",
+                    processOffender.name,
+                    Int32(processOffender.pid),
+                    processOffender.averageCPUPercent
+                )
+            )
+        }
+
+        return segments.joined(separator: " ")
     }
 }

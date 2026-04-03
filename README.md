@@ -4,16 +4,16 @@ __Rapid Autonomy Depletion Warning App__
 
 A macOS menu bar utility that watches your CPU load and alerts you when your MacBook is working unusually hard on battery power — before the computer warms up and the battery gauge nosedives.
 
-RadFlag compares your recent system load against an established baseline and raises a flag when something is out of the ordinary, so you can investigate a runaway process before it ruins your remaining battery life.
+RadFlag compares your recent system load against an established baseline and also watches for any process that keeps burning more than one full CPU core for five straight minutes. The goal is to catch runaway plugins, render loops, and polling storms before they ruin your remaining battery life.
 
 ## How it works
 
-RadFlag samples the system's load average and maintains a rolling 2-hour history. It splits this history into two windows:
+RadFlag samples the system every 20 seconds and maintains a rolling 40-minute history. It uses two battery-only tripwires:
 
-- **Baseline**: what "normal" looks like for your current session
-- **Recent**: what's happening now
+- **Load tripwire**: compare the recent 5-minute load average against the prior 35-minute baseline
+- **Process tripwire**: flag any process whose average CPU use stays above 100% for the last 5 minutes
 
-When the recent average exceeds the baseline by a configurable ratio (default 1.5x) _and_ you're on battery power, RadFlag sends a macOS notification. It will remind you as long as the load stays elevated.
+When either rule fires while you're on battery power, RadFlag sends a macOS notification. If the process rule is responsible, the alert includes the process name and PID. It will remind you as long as the condition stays elevated.
 
 Alerts clear automatically when you plug in, and you can mute them from the menu bar if you know why you're burning the Amperes.
 
@@ -44,16 +44,16 @@ xcodebuild -scheme RadFlag -destination 'platform=macOS' test
 
 ## Usage
 
-RadFlag lives in your menu bar. After launch, it needs some time to establish a baseline — you'll see a warmup indicator until then.
+RadFlag lives in your menu bar. After launch, rogue-process detection becomes meaningful after 5 minutes of samples, and the load baseline finishes warming up after 10 minutes.
 
 The menu bar icon shows:
 
 - **Green checkmark** — load is normal (or you're on AC power)
-- **Red warning triangle** — recent load is significantly above baseline while on battery
+- **Red warning triangle** — the load and/or process tripwire is active while on battery
 
-Click the icon to see current stats (load, baseline, ratio, power source) and access controls:
+Click the icon to see current stats (5-minute load, baseline, ratio, trigger reason, offending process, power source) and access controls:
 
-- **Mute** — suppress alerts for one hour
+- **Mute** — suppress alerts for 20 minutes
 - **Sample now** — take an immediate reading
 - **Settings** — adjust alert threshold (1.25x–2.0x), toggle notification sound, enable launch at login
 
