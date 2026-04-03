@@ -36,6 +36,14 @@ Or build from the command line:
 xcodebuild -scheme RadFlag build
 ```
 
+## Installing A Release Build
+
+If macOS quarantines a downloaded copy of `RadFlag.app`, remove the quarantine attribute before launching it:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/RadFlag.app
+```
+
 ## Running the tests
 
 ```sh
