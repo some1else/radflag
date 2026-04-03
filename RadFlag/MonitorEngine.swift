@@ -10,7 +10,6 @@ final class MonitorEngine {
     static let minimumProcessSampleCount = processWindowSize + 1
     static let clearRatio = 1.3
     static let minimumRecentAverage = 1.0
-    static let processCPUThreshold = 100.0
     static let repeatInterval: TimeInterval = 5 * 60
     static let muteInterval: TimeInterval = 20 * 60
     private static let baselineFloor = 0.01
@@ -34,8 +33,15 @@ final class MonitorEngine {
         }
 
         let loadMetrics = buildLoadMetrics()
-        let processOffender = updateProcessHistories(with: processSnapshots, at: date)
-        let update = updateState(using: loadMetrics, processOffender: processOffender, at: date, settings: settings)
+        let topProcess = updateProcessHistories(with: processSnapshots, at: date)
+        let processOffender = processOffender(from: topProcess, settings: settings)
+        let update = updateState(
+            using: loadMetrics,
+            topProcess: topProcess,
+            processOffender: processOffender,
+            at: date,
+            settings: settings
+        )
         snapshot = update.snapshot
         return update
     }
@@ -62,6 +68,7 @@ final class MonitorEngine {
 
     private func updateState(
         using loadMetrics: LoadMetrics,
+        topProcess: ProcessOffender?,
         processOffender: ProcessOffender?,
         at date: Date,
         settings: MonitorSettings
@@ -113,7 +120,8 @@ final class MonitorEngine {
             recentAverage: loadMetrics.recentAverage,
             baselineAverage: loadMetrics.baselineAverage,
             ratio: loadMetrics.ratio,
-            processOffender: triggerReason == nil ? nil : processOffender,
+            topProcess: topProcess,
+            processOffender: processOffender,
             triggerReason: triggerReason,
             sampleCount: loadMetrics.sampleCount,
             alertState: nextAlertState,
@@ -194,10 +202,10 @@ final class MonitorEngine {
         }
 
         processHistories = nextHistories
-        return topProcessOffender(in: nextHistories)
+        return topProcess(in: nextHistories)
     }
 
-    private func topProcessOffender(in histories: [pid_t: ProcessHistory]) -> ProcessOffender? {
+    private func topProcess(in histories: [pid_t: ProcessHistory]) -> ProcessOffender? {
         histories.reduce(into: nil as ProcessOffender?) { best, entry in
             let (pid, history) = entry
             guard history.cpuSamples.count >= Self.processWindowSize else {
@@ -205,14 +213,21 @@ final class MonitorEngine {
             }
 
             let averageCPUPercent = history.cpuSamples.reduce(0) { $0 + $1.cpuPercent } / Double(history.cpuSamples.count)
-            guard averageCPUPercent > Self.processCPUThreshold else {
-                return
-            }
-
             if best == nil || averageCPUPercent > best!.averageCPUPercent {
                 best = ProcessOffender(pid: pid, name: history.name, averageCPUPercent: averageCPUPercent)
             }
         }
+    }
+
+    private func processOffender(from topProcess: ProcessOffender?, settings: MonitorSettings) -> ProcessOffender? {
+        guard
+            let topProcess,
+            topProcess.averageCPUPercent > settings.processCPUThresholdPercent
+        else {
+            return nil
+        }
+
+        return topProcess
     }
 
     private func average(for samples: [LoadSample]) -> Double? {

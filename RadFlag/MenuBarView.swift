@@ -19,11 +19,10 @@ struct MenuBarView: View {
                 LabeledContent("Recent average", value: model.recentAverageText)
                 LabeledContent("Baseline", value: model.baselineText)
                 LabeledContent("Ratio", value: model.ratioText)
+                LabeledContent("Top process", value: model.topProcessNameText)
+                LabeledContent("PID", value: model.topProcessPIDText)
+                LabeledContent("CPU avg", value: model.topProcessCPUText)
                 LabeledContent("Trigger", value: model.triggerReasonText)
-                if model.hasProcessOffender {
-                    LabeledContent("Offender", value: model.offenderText)
-                    LabeledContent("CPU avg", value: model.offenderCPUText)
-                }
                 LabeledContent("Power", value: model.powerSourceText)
                 LabeledContent("Last alert", value: model.lastAlertText)
             }

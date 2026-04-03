@@ -47,6 +47,7 @@ struct ProcessOffender: Equatable {
 
 struct MonitorSettings: Codable, Equatable {
     var thresholdRatio: Double = 1.5
+    var processCPUThresholdPercent: Double = 100
     var soundEnabled: Bool = true
     var launchAtLogin: Bool = true
 }
@@ -118,6 +119,7 @@ struct MonitorSnapshot: Equatable {
     var recentAverage: Double?
     var baselineAverage: Double?
     var ratio: Double?
+    var topProcess: ProcessOffender?
     var processOffender: ProcessOffender?
     var triggerReason: AlertTriggerReason?
     var sampleCount: Int
@@ -130,6 +132,7 @@ struct MonitorSnapshot: Equatable {
         recentAverage: nil,
         baselineAverage: nil,
         ratio: nil,
+        topProcess: nil,
         processOffender: nil,
         triggerReason: nil,
         sampleCount: 0,

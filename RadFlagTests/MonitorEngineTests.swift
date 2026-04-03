@@ -132,6 +132,7 @@ final class MonitorEngineTests: XCTestCase {
         }
 
         XCTAssertEqual(lastUpdate?.snapshot.alertState, .ok)
+        XCTAssertNil(lastUpdate?.snapshot.topProcess)
         XCTAssertNil(lastUpdate?.snapshot.processOffender)
 
         let triggerUpdate = sample(
@@ -145,11 +146,39 @@ final class MonitorEngineTests: XCTestCase {
 
         XCTAssertEqual(triggerUpdate.snapshot.alertState, .high)
         XCTAssertEqual(triggerUpdate.snapshot.triggerReason, .process)
+        XCTAssertEqual(triggerUpdate.snapshot.topProcess?.pid, pid)
         XCTAssertEqual(triggerUpdate.snapshot.processOffender?.pid, pid)
         XCTAssertEqual(triggerUpdate.snapshot.processOffender?.name, "Code Helper")
         XCTAssertEqual(try XCTUnwrap(triggerUpdate.snapshot.processOffender?.averageCPUPercent), 150, accuracy: 0.0001)
         XCTAssertTrue(triggerUpdate.snapshot.isWarmingUp)
         XCTAssertEqual(triggerUpdate.notification?.kind, .enteredHigh)
+    }
+
+    func testTopProcessAppearsBeforeCrossingConfiguredThreshold() throws {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.processCPUThresholdPercent = 200
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 8080
+        var lastUpdate: MonitorUpdate?
+
+        for sampleIndex in 0..<MonitorEngine.minimumProcessSampleCount {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [processSnapshot(pid: pid, name: "Code Helper", sampleIndex: sampleIndex, cpuPercent: 150)],
+                start: start,
+                settings: settings
+            )
+        }
+
+        XCTAssertEqual(lastUpdate?.snapshot.alertState, .ok)
+        XCTAssertEqual(lastUpdate?.snapshot.topProcess?.pid, pid)
+        XCTAssertEqual(lastUpdate?.snapshot.topProcess?.name, "Code Helper")
+        XCTAssertEqual(try XCTUnwrap(lastUpdate?.snapshot.topProcess?.averageCPUPercent), 150, accuracy: 0.0001)
+        XCTAssertNil(lastUpdate?.snapshot.processOffender)
+        XCTAssertNil(lastUpdate?.snapshot.triggerReason)
     }
 
     func testHighestProcessOffenderWins() {
@@ -176,9 +205,78 @@ final class MonitorEngineTests: XCTestCase {
 
         XCTAssertEqual(lastUpdate?.snapshot.alertState, .high)
         XCTAssertEqual(lastUpdate?.snapshot.triggerReason, .process)
+        XCTAssertEqual(lastUpdate?.snapshot.topProcess?.pid, fasterPID)
+        XCTAssertEqual(lastUpdate?.snapshot.topProcess?.name, "TypeScript Server")
         XCTAssertEqual(lastUpdate?.snapshot.processOffender?.pid, fasterPID)
         XCTAssertEqual(lastUpdate?.snapshot.processOffender?.name, "TypeScript Server")
         XCTAssertEqual(try XCTUnwrap(lastUpdate?.snapshot.processOffender?.averageCPUPercent), 180, accuracy: 0.0001)
+    }
+
+    func testConfigurableProcessThresholdChangesOnlyProcessAlerting() {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.processCPUThresholdPercent = 160
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 9090
+
+        for sampleIndex in 0..<MonitorEngine.minimumProcessSampleCount {
+            _ = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [processSnapshot(pid: pid, name: "Code Helper", sampleIndex: sampleIndex, cpuPercent: 150)],
+                start: start,
+                settings: settings
+            )
+        }
+
+        XCTAssertEqual(engine.snapshot.alertState, .ok)
+        XCTAssertEqual(engine.snapshot.topProcess?.pid, pid)
+        XCTAssertNil(engine.snapshot.processOffender)
+
+        settings.processCPUThresholdPercent = 140
+        let processTriggerUpdate = sample(
+            engine,
+            sampleIndex: MonitorEngine.minimumProcessSampleCount,
+            loadAverage: 1.0,
+            processSnapshots: [processSnapshot(pid: pid, name: "Code Helper", sampleIndex: MonitorEngine.minimumProcessSampleCount, cpuPercent: 150)],
+            start: start,
+            settings: settings
+        )
+
+        XCTAssertEqual(processTriggerUpdate.snapshot.alertState, .high)
+        XCTAssertEqual(processTriggerUpdate.snapshot.triggerReason, .process)
+        XCTAssertEqual(processTriggerUpdate.snapshot.processOffender?.pid, pid)
+
+        let loadOnlyEngine = MonitorEngine()
+        var loadOnlySettings = MonitorSettings()
+        loadOnlySettings.processCPUThresholdPercent = 400
+
+        for sampleIndex in 0..<30 {
+            _ = sample(
+                loadOnlyEngine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [],
+                start: start,
+                settings: loadOnlySettings
+            )
+        }
+
+        var loadAlert: MonitorUpdate?
+        for sampleIndex in 30..<45 {
+            loadAlert = sample(
+                loadOnlyEngine,
+                sampleIndex: sampleIndex,
+                loadAverage: 3.0,
+                processSnapshots: [],
+                start: start,
+                settings: loadOnlySettings
+            )
+        }
+
+        XCTAssertEqual(loadAlert?.snapshot.alertState, .high)
+        XCTAssertEqual(loadAlert?.snapshot.triggerReason, .load)
     }
 
     func testExitedProcessIsPrunedAndAlertClears() {
@@ -209,6 +307,7 @@ final class MonitorEngineTests: XCTestCase {
 
         XCTAssertEqual(clearedUpdate.snapshot.alertState, .ok)
         XCTAssertNil(clearedUpdate.snapshot.triggerReason)
+        XCTAssertNil(clearedUpdate.snapshot.topProcess)
         XCTAssertNil(clearedUpdate.snapshot.processOffender)
     }
 
@@ -425,5 +524,30 @@ final class MonitorEngineTests: XCTestCase {
 
     private func cumulativeCPUTime(sampleIndex: Int, cpuPercent: Double) -> UInt64 {
         UInt64(Double(sampleIndex) * MonitorEngine.sampleInterval * cpuPercent / 100 * 1_000_000_000)
+    }
+}
+
+final class MonitorSettingsStoreTests: XCTestCase {
+    func testStoreDefaultsIncludeProcessCPUThreshold() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let store = MonitorSettingsStore(defaults: defaults)
+
+        XCTAssertEqual(store.load().processCPUThresholdPercent, 100)
+    }
+
+    func testStorePersistsProcessCPUThreshold() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let store = MonitorSettingsStore(defaults: defaults)
+        var settings = MonitorSettings()
+        settings.thresholdRatio = 1.7
+        settings.processCPUThresholdPercent = 230
+        settings.soundEnabled = false
+        settings.launchAtLogin = false
+
+        store.save(settings)
+
+        XCTAssertEqual(store.load(), settings)
     }
 }

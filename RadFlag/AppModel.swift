@@ -77,6 +77,10 @@ final class AppModel: ObservableObject {
         return String(format: "%.2fx", ratio)
     }
 
+    var processThresholdText: String {
+        String(format: "%.0f%%", settings.processCPUThresholdPercent)
+    }
+
     var powerSourceText: String {
         snapshot.latestSample?.powerSource.displayName ?? PowerSource.unknown.displayName
     }
@@ -85,19 +89,22 @@ final class AppModel: ObservableObject {
         snapshot.triggerReason?.displayName ?? "--"
     }
 
-    var offenderText: String {
-        snapshot.processOffender?.displayName ?? "--"
+    var topProcessNameText: String {
+        snapshot.topProcess?.name ?? "--"
     }
 
-    var offenderCPUText: String {
-        guard let offender = snapshot.processOffender else {
+    var topProcessPIDText: String {
+        guard let topProcess = snapshot.topProcess else {
+            return "--"
+        }
+        return String(Int32(topProcess.pid))
+    }
+
+    var topProcessCPUText: String {
+        guard let offender = snapshot.topProcess else {
             return "--"
         }
         return String(format: "%.0f%%", offender.averageCPUPercent)
-    }
-
-    var hasProcessOffender: Bool {
-        snapshot.processOffender != nil
     }
 
     var lastAlertText: String {
@@ -125,7 +132,7 @@ final class AppModel: ObservableObject {
 
     var warmupText: String {
         guard snapshot.isWarmingUp else {
-            return "Monitoring the last 5 minutes against the prior 35 minutes. Rogue-process detection uses a rolling 5-minute CPU window."
+            return "Monitoring the last 5 minutes against the prior 35 minutes. Rogue-process detection uses a rolling 5-minute CPU window and alerts above \(processThresholdText)."
         }
 
         let remainingProcessSamples = max(0, MonitorEngine.minimumProcessSampleCount - snapshot.sampleCount)
@@ -135,11 +142,15 @@ final class AppModel: ObservableObject {
             return "Rogue-process detection arms in \(remainingProcessSamples) more sample(s); load baseline in \(remainingLoadSamples) more."
         }
 
-        return "Rogue-process detection is live. Load baseline warms for \(remainingLoadSamples) more sample(s)."
+        return "Rogue-process detection is live above \(processThresholdText). Load baseline warms for \(remainingLoadSamples) more sample(s)."
     }
 
     func updateThresholdRatio(_ ratio: Double) {
         settings.thresholdRatio = ratio
+    }
+
+    func updateProcessCPUThresholdPercent(_ threshold: Double) {
+        settings.processCPUThresholdPercent = threshold
     }
 
     func updateSoundEnabled(_ isEnabled: Bool) {
