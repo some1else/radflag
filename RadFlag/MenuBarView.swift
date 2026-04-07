@@ -51,7 +51,10 @@ struct MenuBarView: View {
                 }
                 .disabled(!model.canToggleMute)
 
-                SettingsLink {
+                Button {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: RadFlagSceneID.settings)
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
 
