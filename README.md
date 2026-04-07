@@ -10,7 +10,7 @@ RadFlag compares your recent system load against an established baseline and als
 
 RadFlag samples the system every 20 seconds and maintains a rolling 40-minute history. It uses two battery-only tripwires:
 
-- **Load tripwire**: compare the recent 5-minute load average against the prior 35-minute baseline
+- **Load tripwire**: compare the recent 5-minute load average against an adaptive baseline that rises gradually and recovers faster after spikes
 - **Process tripwire**: flag any process whose average CPU use stays above your configured threshold for the last 5 minutes
 
 When either rule fires while you're on battery power, RadFlag sends a macOS notification. If the process rule is responsible, the alert includes the process name and PID. The dropdown always shows the current top 5-minute process once enough samples are available, even if it is below the alert threshold.
@@ -52,7 +52,7 @@ xcodebuild -scheme RadFlag -destination 'platform=macOS' test
 
 ## Usage
 
-RadFlag lives in your menu bar. After launch, rogue-process detection becomes meaningful after 5 minutes of samples, and the load baseline finishes warming up after 10 minutes.
+RadFlag lives in your menu bar. After launch, rogue-process detection becomes meaningful after 5 minutes of samples, and the adaptive load baseline finishes warming up after 10 minutes.
 
 The menu bar icon shows:
 
@@ -63,7 +63,7 @@ Click the icon to see current stats (5-minute load, baseline, ratio, top process
 
 - **Mute** — suppress alerts for 20 minutes
 - **Sample now** — take an immediate reading
-- **Settings** — adjust the load ratio threshold (1.25x–2.0x), the process CPU threshold (50%–400%), toggle notification sound, and enable launch at login
+- **Settings** — adjust the load ratio threshold (1.25x–2.0x), baseline rise/recovery speed, the process CPU threshold (50%–400%), toggle notification sound, and enable launch at login
 
 ## No external dependencies
 

@@ -3,12 +3,120 @@ import XCTest
 @testable import RadFlag
 
 final class MonitorEngineTests: XCTestCase {
-    func testRollingBaselineExcludesMostRecentFifteenSamples() throws {
+    func testAdaptiveBaselineSeedsAfterFirstFullRecentWindow() throws {
         let engine = MonitorEngine()
         let settings = MonitorSettings()
         let start = Date(timeIntervalSince1970: 0)
 
-        for sampleIndex in 0..<105 {
+        for sampleIndex in 0..<14 {
+            let update = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 2.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+
+            XCTAssertNil(update.snapshot.recentAverage)
+            XCTAssertNil(update.snapshot.baselineAverage)
+            XCTAssertNil(update.snapshot.ratio)
+        }
+
+        let seedUpdate = sample(
+            engine,
+            sampleIndex: 14,
+            loadAverage: 2.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+
+        XCTAssertEqual(try XCTUnwrap(seedUpdate.snapshot.recentAverage), 2.0, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(seedUpdate.snapshot.baselineAverage), 2.0, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(seedUpdate.snapshot.ratio), 1.0, accuracy: 0.0001)
+    }
+
+    func testAdaptiveBaselineRiseAndRecoveryUseSeparateFactors() throws {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.baselineRiseFactor = 0.03
+        settings.baselineRecoveryFactor = 0.10
+        let start = Date(timeIntervalSince1970: 0)
+        var lastUpdate: MonitorUpdate?
+
+        for sampleIndex in 0..<15 {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        for sampleIndex in 15..<30 {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 3.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        let riseBaselineBefore = try XCTUnwrap(lastUpdate?.snapshot.baselineAverage)
+        let riseStepUpdate = sample(
+            engine,
+            sampleIndex: 30,
+            loadAverage: 3.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+        let riseBaselineAfter = try XCTUnwrap(riseStepUpdate.snapshot.baselineAverage)
+        XCTAssertEqual(try XCTUnwrap(riseStepUpdate.snapshot.recentAverage), 3.0, accuracy: 0.0001)
+        let riseFraction = (riseBaselineAfter - riseBaselineBefore) / (3.0 - riseBaselineBefore)
+
+        for sampleIndex in 31..<46 {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        let recoveryBaselineBefore = try XCTUnwrap(lastUpdate?.snapshot.baselineAverage)
+        let recoveryStepUpdate = sample(
+            engine,
+            sampleIndex: 46,
+            loadAverage: 1.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+        let recoveryBaselineAfter = try XCTUnwrap(recoveryStepUpdate.snapshot.baselineAverage)
+        XCTAssertEqual(try XCTUnwrap(recoveryStepUpdate.snapshot.recentAverage), 1.0, accuracy: 0.0001)
+        let recoveryFraction = (recoveryBaselineBefore - recoveryBaselineAfter) / (recoveryBaselineBefore - 1.0)
+
+        XCTAssertEqual(riseFraction, settings.baselineRiseFactor, accuracy: 0.0001)
+        XCTAssertEqual(recoveryFraction, settings.baselineRecoveryFactor, accuracy: 0.0001)
+        XCTAssertGreaterThan(recoveryFraction, riseFraction)
+    }
+
+    func testUpdatingBaselineFactorsAffectsFutureStepsWithoutReset() throws {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.baselineRiseFactor = 0.01
+        settings.baselineRecoveryFactor = 0.10
+        let start = Date(timeIntervalSince1970: 0)
+
+        for sampleIndex in 0..<15 {
             _ = sample(
                 engine,
                 sampleIndex: sampleIndex,
@@ -19,20 +127,44 @@ final class MonitorEngineTests: XCTestCase {
             )
         }
 
-        for sampleIndex in 105..<120 {
+        for sampleIndex in 15..<30 {
             _ = sample(
                 engine,
                 sampleIndex: sampleIndex,
-                loadAverage: 4.0,
+                loadAverage: 3.0,
                 processSnapshots: [],
                 start: start,
                 settings: settings
             )
         }
 
-        XCTAssertEqual(try XCTUnwrap(engine.snapshot.recentAverage), 4.0, accuracy: 0.0001)
-        XCTAssertEqual(try XCTUnwrap(engine.snapshot.baselineAverage), 1.0, accuracy: 0.0001)
-        XCTAssertEqual(try XCTUnwrap(engine.snapshot.ratio), 4.0, accuracy: 0.0001)
+        let beforeFactorChange = sample(
+            engine,
+            sampleIndex: 30,
+            loadAverage: 3.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+        let baselineBefore = try XCTUnwrap(beforeFactorChange.snapshot.baselineAverage)
+
+        settings.baselineRiseFactor = 0.10
+        settings.baselineRecoveryFactor = 0.10
+
+        let afterFactorChange = sample(
+            engine,
+            sampleIndex: 31,
+            loadAverage: 3.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+        let baselineAfter = try XCTUnwrap(afterFactorChange.snapshot.baselineAverage)
+        let expected = baselineBefore + settings.baselineRiseFactor * (3.0 - baselineBefore)
+
+        XCTAssertEqual(try XCTUnwrap(afterFactorChange.snapshot.recentAverage), 3.0, accuracy: 0.0001)
+        XCTAssertGreaterThan(baselineBefore, 1.0)
+        XCTAssertEqual(baselineAfter, expected, accuracy: 0.0001)
     }
 
     func testWarmupPreventsLoadAlertsBeforeThirtySamples() {
@@ -691,6 +823,8 @@ final class MonitorSettingsStoreTests: XCTestCase {
         let store = MonitorSettingsStore(defaults: defaults)
 
         XCTAssertEqual(store.load().processCPUThresholdPercent, 100)
+        XCTAssertEqual(store.load().baselineRiseFactor, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(store.load().baselineRecoveryFactor, 0.10, accuracy: 0.0001)
     }
 
     func testStorePersistsProcessCPUThreshold() {
@@ -706,5 +840,40 @@ final class MonitorSettingsStoreTests: XCTestCase {
         store.save(settings)
 
         XCTAssertEqual(store.load(), settings)
+    }
+
+    func testLegacySettingsJSONDecodesAdaptiveDefaults() throws {
+        let legacyData = """
+        {
+          "thresholdRatio": 1.7,
+          "processCPUThresholdPercent": 230,
+          "soundEnabled": false,
+          "launchAtLogin": false
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(MonitorSettings.self, from: legacyData)
+
+        XCTAssertEqual(decoded.thresholdRatio, 1.7, accuracy: 0.0001)
+        XCTAssertEqual(decoded.processCPUThresholdPercent, 230, accuracy: 0.0001)
+        XCTAssertFalse(decoded.soundEnabled)
+        XCTAssertFalse(decoded.launchAtLogin)
+        XCTAssertEqual(decoded.baselineRiseFactor, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(decoded.baselineRecoveryFactor, 0.10, accuracy: 0.0001)
+    }
+
+    func testStoreNormalizesBaselineRecoveryNotBelowRise() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let store = MonitorSettingsStore(defaults: defaults)
+        var settings = MonitorSettings()
+        settings.baselineRiseFactor = 0.08
+        settings.baselineRecoveryFactor = 0.04
+
+        store.save(settings)
+        let loaded = store.load()
+
+        XCTAssertEqual(loaded.baselineRiseFactor, 0.08, accuracy: 0.0001)
+        XCTAssertEqual(loaded.baselineRecoveryFactor, 0.08, accuracy: 0.0001)
     }
 }

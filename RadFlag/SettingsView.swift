@@ -51,6 +51,52 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Adaptive Baseline") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Baseline rise")
+                        Spacer()
+                        Text(String(format: "%.2f", model.settings.baselineRiseFactor))
+                            .monospacedDigit()
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { model.settings.baselineRiseFactor },
+                            set: model.updateBaselineRiseFactor
+                        ),
+                        in: 0.01...0.10,
+                        step: 0.01
+                    )
+
+                    Text("Higher values make the baseline climb faster when load stays elevated.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Baseline recovery")
+                        Spacer()
+                        Text(String(format: "%.2f", model.settings.baselineRecoveryFactor))
+                            .monospacedDigit()
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { model.settings.baselineRecoveryFactor },
+                            set: model.updateBaselineRecoveryFactor
+                        ),
+                        in: 0.03...0.30,
+                        step: 0.01
+                    )
+
+                    Text("Higher values make the baseline fall faster after spikes; recovery is intentionally kept at least as fast as rise.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Behavior") {
                 Toggle(
                     "Play notification sound",

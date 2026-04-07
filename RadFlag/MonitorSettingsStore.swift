@@ -14,14 +14,15 @@ final class MonitorSettingsStore {
         }
 
         do {
-            return try JSONDecoder().decode(MonitorSettings.self, from: data)
+            return try JSONDecoder().decode(MonitorSettings.self, from: data).normalized()
         } catch {
             return MonitorSettings()
         }
     }
 
     func save(_ settings: MonitorSettings) {
-        guard let data = try? JSONEncoder().encode(settings) else {
+        let normalized = settings.normalized()
+        guard let data = try? JSONEncoder().encode(normalized) else {
             return
         }
         defaults.set(data, forKey: storageKey)
