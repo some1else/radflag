@@ -50,6 +50,50 @@ struct MonitorSettings: Codable, Equatable {
     var processCPUThresholdPercent: Double = 100
     var soundEnabled: Bool = true
     var launchAtLogin: Bool = true
+    var baselineRiseFactor: Double = 0.03
+    var baselineRecoveryFactor: Double = 0.10
+
+    enum CodingKeys: String, CodingKey {
+        case thresholdRatio
+        case processCPUThresholdPercent
+        case soundEnabled
+        case launchAtLogin
+        case baselineRiseFactor
+        case baselineRecoveryFactor
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        thresholdRatio = try container.decodeIfPresent(Double.self, forKey: .thresholdRatio) ?? 1.5
+        processCPUThresholdPercent = try container.decodeIfPresent(Double.self, forKey: .processCPUThresholdPercent) ?? 100
+        soundEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
+        launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
+        baselineRiseFactor = try container.decodeIfPresent(Double.self, forKey: .baselineRiseFactor) ?? 0.03
+        baselineRecoveryFactor = try container.decodeIfPresent(Double.self, forKey: .baselineRecoveryFactor) ?? 0.10
+        enforceBaselineFactorOrder()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(thresholdRatio, forKey: .thresholdRatio)
+        try container.encode(processCPUThresholdPercent, forKey: .processCPUThresholdPercent)
+        try container.encode(soundEnabled, forKey: .soundEnabled)
+        try container.encode(launchAtLogin, forKey: .launchAtLogin)
+        try container.encode(baselineRiseFactor, forKey: .baselineRiseFactor)
+        try container.encode(baselineRecoveryFactor, forKey: .baselineRecoveryFactor)
+    }
+
+    mutating func enforceBaselineFactorOrder() {
+        baselineRecoveryFactor = max(baselineRecoveryFactor, baselineRiseFactor)
+    }
+
+    func normalized() -> MonitorSettings {
+        var copy = self
+        copy.enforceBaselineFactorOrder()
+        return copy
+    }
 }
 
 enum AlertTriggerReason: Equatable {

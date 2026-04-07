@@ -8,3 +8,4 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcuserstate
+*.backup

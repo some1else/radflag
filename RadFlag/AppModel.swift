@@ -132,33 +132,41 @@ final class AppModel: ObservableObject {
 
     var warmupText: String {
         guard snapshot.isWarmingUp else {
-            return "Monitoring the last 5 minutes against the prior 35 minutes. Rogue-process detection uses a rolling 5-minute CPU window and alerts above \(processThresholdText)."
+            return "Monitoring the last 5 minutes against an adaptive baseline (gradual rise, faster recovery after spikes). Rogue-process detection uses a rolling 5-minute CPU window and alerts above \(processThresholdText)."
         }
 
         let remainingProcessSamples = max(0, MonitorEngine.minimumProcessSampleCount - snapshot.sampleCount)
         let remainingLoadSamples = max(0, MonitorEngine.minimumSampleCount - snapshot.sampleCount)
 
         if remainingProcessSamples > 0 {
-            return "Rogue-process detection arms in \(remainingProcessSamples) more sample(s); load baseline in \(remainingLoadSamples) more."
+            return "Rogue-process detection arms in \(remainingProcessSamples) more sample(s); adaptive load baseline in \(remainingLoadSamples) more."
         }
 
-        return "Rogue-process detection is live above \(processThresholdText). Load baseline warms for \(remainingLoadSamples) more sample(s)."
+        return "Rogue-process detection is live above \(processThresholdText). Adaptive load baseline warms for \(remainingLoadSamples) more sample(s)."
     }
 
     func updateThresholdRatio(_ ratio: Double) {
-        settings.thresholdRatio = ratio
+        updateSettings { $0.thresholdRatio = ratio }
     }
 
     func updateProcessCPUThresholdPercent(_ threshold: Double) {
-        settings.processCPUThresholdPercent = threshold
+        updateSettings { $0.processCPUThresholdPercent = threshold }
+    }
+
+    func updateBaselineRiseFactor(_ factor: Double) {
+        updateSettings { $0.baselineRiseFactor = factor }
+    }
+
+    func updateBaselineRecoveryFactor(_ factor: Double) {
+        updateSettings { $0.baselineRecoveryFactor = factor }
     }
 
     func updateSoundEnabled(_ isEnabled: Bool) {
-        settings.soundEnabled = isEnabled
+        updateSettings { $0.soundEnabled = isEnabled }
     }
 
     func updateLaunchAtLogin(_ isEnabled: Bool) {
-        settings.launchAtLogin = isEnabled
+        updateSettings { $0.launchAtLogin = isEnabled }
         syncLaunchAtLogin(enabled: isEnabled)
     }
 
@@ -243,6 +251,13 @@ final class AppModel: ObservableObject {
             return "--"
         }
         return String(format: "%.2f", value)
+    }
+
+    private func updateSettings(_ mutate: (inout MonitorSettings) -> Void) {
+        var nextSettings = settings
+        mutate(&nextSettings)
+        nextSettings.enforceBaselineFactorOrder()
+        settings = nextSettings
     }
 
     private static let timeFormatter: DateFormatter = {

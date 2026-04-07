@@ -18,6 +18,7 @@ final class MonitorEngine {
     private(set) var samples: [LoadSample] = []
     private(set) var snapshot: MonitorSnapshot = .empty
     private var processHistories: [pid_t: ProcessHistory] = [:]
+    private var adaptiveBaselineAverage: Double?
 
     func processSample(
         loadAverage: Double,
@@ -26,21 +27,22 @@ final class MonitorEngine {
         at date: Date,
         settings: MonitorSettings
     ) -> MonitorUpdate {
+        let normalizedSettings = settings.normalized()
         let sample = LoadSample(timestamp: date, loadAverage: loadAverage, powerSource: powerSource)
         samples.append(sample)
         if samples.count > Self.maxSamples {
             samples.removeFirst(samples.count - Self.maxSamples)
         }
 
-        let loadMetrics = buildLoadMetrics()
+        let loadMetrics = buildLoadMetrics(settings: normalizedSettings)
         let topProcess = updateProcessHistories(with: processSnapshots, at: date)
-        let processOffender = processOffender(from: topProcess, settings: settings)
+        let processOffender = processOffender(from: topProcess, settings: normalizedSettings)
         let update = updateState(
             using: loadMetrics,
             topProcess: topProcess,
             processOffender: processOffender,
             at: date,
-            settings: settings
+            settings: normalizedSettings
         )
         snapshot = update.snapshot
         return update
@@ -132,17 +134,12 @@ final class MonitorEngine {
         return MonitorUpdate(snapshot: nextSnapshot, notification: notification)
     }
 
-    private func buildLoadMetrics() -> LoadMetrics {
+    private func buildLoadMetrics(settings: MonitorSettings) -> LoadMetrics {
         let latestSample = samples.last
         let recentSamples = Array(samples.suffix(Self.recentWindowSize))
-        let baselineSamples = Array(
-            samples
-                .dropLast(min(Self.recentWindowSize, samples.count))
-                .suffix(Self.maxSamples - Self.recentWindowSize)
-        )
 
-        let recentAverage = average(for: recentSamples)
-        let baselineAverage = average(for: baselineSamples)
+        let recentAverage = recentSamples.count == Self.recentWindowSize ? average(for: recentSamples) : nil
+        let baselineAverage = updateAdaptiveBaseline(using: recentAverage, settings: settings)
         let ratio = baselineAverage.map { baseline -> Double in
             guard let recentAverage else {
                 return 0
@@ -152,7 +149,7 @@ final class MonitorEngine {
 
         let canEvaluate = samples.count >= Self.minimumSampleCount
             && recentSamples.count == Self.recentWindowSize
-            && !baselineSamples.isEmpty
+            && baselineAverage != nil
             && ratio != nil
 
         return LoadMetrics(
@@ -164,6 +161,24 @@ final class MonitorEngine {
             powerSource: latestSample?.powerSource ?? .unknown,
             canEvaluate: canEvaluate
         )
+    }
+
+    private func updateAdaptiveBaseline(using recentAverage: Double?, settings: MonitorSettings) -> Double? {
+        guard let recentAverage else {
+            return adaptiveBaselineAverage
+        }
+
+        guard let currentBaseline = adaptiveBaselineAverage else {
+            adaptiveBaselineAverage = recentAverage
+            return recentAverage
+        }
+
+        let factor = recentAverage > currentBaseline
+            ? settings.baselineRiseFactor
+            : settings.baselineRecoveryFactor
+        let nextBaseline = currentBaseline + factor * (recentAverage - currentBaseline)
+        adaptiveBaselineAverage = nextBaseline
+        return nextBaseline
     }
 
     private func updateProcessHistories(with snapshots: [ProcessCPUSnapshot], at date: Date) -> ProcessOffender? {
