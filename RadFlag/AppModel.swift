@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     private let notificationCoordinator: NotificationCoordinating
     private let settingsStore: MonitorSettingsStore
     private var timer: Timer?
+    private(set) var activeTimerInterval: TimeInterval?
 
     init(
         engine: MonitorEngine = MonitorEngine(),
@@ -47,7 +48,7 @@ final class AppModel: ObservableObject {
     }
 
     var menuBarTitle: String {
-        "5m \(formattedNumber(snapshot.latestSample?.loadAverage)) \(statusText)"
+        "\(loadWindowShortText) \(formattedNumber(snapshot.latestSample?.loadAverage)) \(statusText)"
     }
 
     var statusText: String {
@@ -116,7 +117,7 @@ final class AppModel: ObservableObject {
     }
 
     var muteButtonTitle: String {
-        isMuted ? "Unmute" : "Mute for 20 minutes"
+        isMuted ? "Unmute" : "Mute for \(durationText(settings.muteIntervalSeconds))"
     }
 
     var canToggleMute: Bool {
@@ -130,19 +131,94 @@ final class AppModel: ObservableObject {
         return false
     }
 
-    var warmupText: String {
+    var monitoringStatusRows: [MonitoringStatusRow] {
+        Self.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: processThresholdText,
+            loadWindowText: loadWindowText,
+            processWindowText: processWindowText,
+            minimumLoadSampleCount: MonitorEngine.minimumSampleCount(for: settings),
+            minimumProcessSampleCount: MonitorEngine.minimumProcessSampleCount(for: settings)
+        )
+    }
+
+    var sampleIntervalText: String {
+        shortDurationText(settings.sampleIntervalSeconds)
+    }
+
+    var loadWindowShortText: String {
+        shortDurationText(settings.loadWindowSeconds)
+    }
+
+    var loadWindowText: String {
+        durationText(settings.loadWindowSeconds)
+    }
+
+    var processWindowText: String {
+        durationText(settings.processWindowSeconds)
+    }
+
+    var repeatIntervalText: String {
+        durationText(settings.repeatIntervalSeconds)
+    }
+
+    var muteDurationText: String {
+        durationText(settings.muteIntervalSeconds)
+    }
+
+    static func makeMonitoringStatusRows(
+        snapshot: MonitorSnapshot,
+        processThresholdText: String,
+        loadWindowText: String = "5 minutes",
+        processWindowText: String = "5 minutes",
+        minimumLoadSampleCount: Int = MonitorEngine.minimumSampleCount,
+        minimumProcessSampleCount: Int = MonitorEngine.minimumProcessSampleCount
+    ) -> [MonitoringStatusRow] {
+        var rows = [MonitoringStatusRow(label: "Window:", value: loadWindowText)]
+
         guard snapshot.isWarmingUp else {
-            return "Monitoring the last 5 minutes against an adaptive baseline (gradual rise, faster recovery after spikes). Rogue-process detection uses a rolling 5-minute CPU window and alerts above \(processThresholdText)."
+            rows.append(MonitoringStatusRow(label: "Load rule:", value: "Adaptive baseline"))
+            rows.append(MonitoringStatusRow(label: "Baseline:", value: "Slow rise / fast recovery"))
+            rows.append(MonitoringStatusRow(label: "Process rule:", value: "\(processWindowText) CPU average"))
+            rows.append(MonitoringStatusRow(label: "Threshold:", value: "> \(processThresholdText)"))
+            rows.append(MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+            return rows
         }
 
-        let remainingProcessSamples = max(0, MonitorEngine.minimumProcessSampleCount - snapshot.sampleCount)
-        let remainingLoadSamples = max(0, MonitorEngine.minimumSampleCount - snapshot.sampleCount)
+        let remainingProcessSamples = max(0, minimumProcessSampleCount - snapshot.sampleCount)
+        let remainingLoadSamples = max(0, minimumLoadSampleCount - snapshot.sampleCount)
 
         if remainingProcessSamples > 0 {
-            return "Rogue-process detection arms in \(remainingProcessSamples) more sample(s); adaptive load baseline in \(remainingLoadSamples) more."
+            rows.append(
+                MonitoringStatusRow(
+                    label: "Process rule:",
+                    value: "Arms in \(remainingProcessSamples) sample(s)"
+                )
+            )
+            rows.append(
+                MonitoringStatusRow(
+                    label: "Load rule:",
+                    value: "Warms in \(remainingLoadSamples) sample(s)"
+                )
+            )
+            rows.append(MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+            return rows
         }
 
-        return "Rogue-process detection is live above \(processThresholdText). Adaptive load baseline warms for \(remainingLoadSamples) more sample(s)."
+        rows.append(
+            MonitoringStatusRow(
+                label: "Process rule:",
+                value: "Live (> \(processThresholdText))"
+            )
+        )
+        rows.append(
+            MonitoringStatusRow(
+                label: "Load rule:",
+                value: "Warms in \(remainingLoadSamples) sample(s)"
+            )
+        )
+        rows.append(MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+        return rows
     }
 
     func updateThresholdRatio(_ ratio: Double) {
@@ -170,11 +246,32 @@ final class AppModel: ObservableObject {
         syncLaunchAtLogin(enabled: isEnabled)
     }
 
+    func updateSampleIntervalSeconds(_ seconds: Double) {
+        updateSettings { $0.sampleIntervalSeconds = seconds }
+        restartMonitoring(sampleImmediately: true)
+    }
+
+    func updateLoadWindowSeconds(_ seconds: Double) {
+        updateSettings { $0.loadWindowSeconds = seconds }
+    }
+
+    func updateProcessWindowSeconds(_ seconds: Double) {
+        updateSettings { $0.processWindowSeconds = seconds }
+    }
+
+    func updateRepeatIntervalSeconds(_ seconds: Double) {
+        updateSettings { $0.repeatIntervalSeconds = seconds }
+    }
+
+    func updateMuteIntervalSeconds(_ seconds: Double) {
+        updateSettings { $0.muteIntervalSeconds = seconds }
+    }
+
     func toggleMute() {
         if isMuted {
             snapshot = engine.unmute()
         } else {
-            snapshot = engine.muteForOneHour()
+            snapshot = engine.mute(using: settings)
         }
     }
 
@@ -196,14 +293,28 @@ final class AppModel: ObservableObject {
             notificationCoordinator.sendAlert(
                 for: update.snapshot,
                 kind: notification.kind,
-                soundEnabled: settings.soundEnabled
+                soundEnabled: settings.soundEnabled,
+                loadWindowText: loadWindowText,
+                processWindowText: processWindowText
             )
         }
     }
 
     private func startMonitoring() {
-        sampleNow()
-        timer = Timer.scheduledTimer(withTimeInterval: MonitorEngine.sampleInterval, repeats: true) { [weak self] _ in
+        restartMonitoring(sampleImmediately: true)
+    }
+
+    private func restartMonitoring(sampleImmediately: Bool) {
+        timer?.invalidate()
+        timer = nil
+
+        if sampleImmediately {
+            sampleNow()
+        }
+
+        let interval = settings.sampleIntervalSeconds
+        activeTimerInterval = interval
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.sampleNow()
             }
@@ -251,6 +362,25 @@ final class AppModel: ObservableObject {
             return "--"
         }
         return String(format: "%.2f", value)
+    }
+
+    private func shortDurationText(_ seconds: Double) -> String {
+        if seconds < 60 {
+            return "\(Int(seconds))s"
+        }
+
+        let minutes = Int(seconds / 60)
+        return "\(minutes)m"
+    }
+
+    private func durationText(_ seconds: Double) -> String {
+        if seconds < 60 {
+            let wholeSeconds = Int(seconds)
+            return "\(wholeSeconds) " + (wholeSeconds == 1 ? "second" : "seconds")
+        }
+
+        let minutes = Int(seconds / 60)
+        return "\(minutes) " + (minutes == 1 ? "minute" : "minutes")
     }
 
     private func updateSettings(_ mutate: (inout MonitorSettings) -> Void) {

@@ -189,6 +189,39 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertNil(lastUpdate?.notification)
     }
 
+    func testConfigurableLoadWindowChangesWarmupLength() {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.loadWindowSeconds = 2 * 60
+        let start = Date(timeIntervalSince1970: 0)
+        var lastUpdate: MonitorUpdate?
+
+        for sampleIndex in 0..<11 {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        XCTAssertTrue(lastUpdate?.snapshot.isWarmingUp ?? false)
+
+        let liveUpdate = sample(
+            engine,
+            sampleIndex: 11,
+            loadAverage: 1.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+
+        XCTAssertFalse(liveUpdate.snapshot.isWarmingUp)
+        XCTAssertEqual(MonitorEngine.minimumSampleCount(for: settings), 12)
+    }
+
     func testEnteringHighStateAndRepeatingAfterFiveMinutes() {
         let engine = MonitorEngine()
         let settings = MonitorSettings()
@@ -245,6 +278,43 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertTrue(sawRepeatedHigh)
     }
 
+    func testConfigurableRepeatIntervalRepeatsSooner() {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.repeatIntervalSeconds = 60
+        let start = Date(timeIntervalSince1970: 0)
+        var repeatedAtSample: Int?
+
+        for sampleIndex in 0..<30 {
+            _ = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        for sampleIndex in 30..<50 {
+            let update = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 3.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+
+            if update.notification?.kind == .repeatedHigh {
+                repeatedAtSample = sampleIndex
+                break
+            }
+        }
+
+        XCTAssertEqual(repeatedAtSample, 33)
+    }
+
     func testProcessTripwireNeedsFullFiveMinutesAndTriggersWithoutLoadSpike() {
         let engine = MonitorEngine()
         let settings = MonitorSettings()
@@ -284,6 +354,42 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(triggerUpdate.snapshot.processOffender?.averageCPUPercent), 150, accuracy: 0.0001)
         XCTAssertTrue(triggerUpdate.snapshot.isWarmingUp)
         XCTAssertEqual(triggerUpdate.notification?.kind, .enteredHigh)
+    }
+
+    func testConfigurableProcessWindowChangesTripwireArmTime() throws {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.processWindowSeconds = 2 * 60
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 4343
+        var lastUpdate: MonitorUpdate?
+
+        for sampleIndex in 0..<(MonitorEngine.minimumProcessSampleCount(for: settings) - 1) {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [processSnapshot(pid: pid, name: "Code Helper", sampleIndex: sampleIndex, cpuPercent: 150, settings: settings)],
+                start: start,
+                settings: settings
+            )
+        }
+
+        XCTAssertNil(lastUpdate?.snapshot.processOffender)
+
+        let triggerSampleIndex = MonitorEngine.minimumProcessSampleCount(for: settings) - 1
+        let triggerUpdate = sample(
+            engine,
+            sampleIndex: triggerSampleIndex,
+            loadAverage: 1.0,
+            processSnapshots: [processSnapshot(pid: pid, name: "Code Helper", sampleIndex: triggerSampleIndex, cpuPercent: 150, settings: settings)],
+            start: start,
+            settings: settings
+        )
+
+        XCTAssertEqual(triggerUpdate.snapshot.processOffender?.pid, pid)
+        XCTAssertEqual(try XCTUnwrap(triggerUpdate.snapshot.processOffender?.averageCPUPercent), 150, accuracy: 0.0001)
+        XCTAssertEqual(MonitorEngine.minimumProcessSampleCount(for: settings), 7)
     }
 
     func testWholeWindowDeltaMathReportsConstantFiveMinuteAverage() throws {
@@ -655,7 +761,7 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertTrue(sawEnteredHigh)
 
         let muteDate = date(for: 45, from: start)
-        _ = engine.muteForOneHour(at: muteDate)
+        _ = engine.mute(using: settings, at: muteDate)
         XCTAssertEqual(engine.snapshot.alertState, .muted(until: muteDate.addingTimeInterval(MonitorEngine.muteInterval)))
 
         for sampleIndex in 45..<105 {
@@ -695,6 +801,50 @@ final class MonitorEngineTests: XCTestCase {
 
         XCTAssertEqual(expiryUpdate.notification?.kind, .repeatedHigh)
         XCTAssertEqual(expiryUpdate.snapshot.alertState, .high)
+    }
+
+    func testConfigurableMuteIntervalExpiresSooner() {
+        let engine = MonitorEngine()
+        var settings = MonitorSettings()
+        settings.muteIntervalSeconds = 5 * 60
+        let start = Date(timeIntervalSince1970: 0)
+
+        for sampleIndex in 0..<30 {
+            _ = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        for sampleIndex in 30..<45 {
+            _ = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 3.0,
+                processSnapshots: [],
+                start: start,
+                settings: settings
+            )
+        }
+
+        let muteDate = date(for: 45, from: start, settings: settings)
+        _ = engine.mute(using: settings, at: muteDate)
+
+        let expiryUpdate = sample(
+            engine,
+            sampleIndex: 60,
+            loadAverage: 5.0,
+            processSnapshots: [],
+            start: start,
+            settings: settings
+        )
+
+        XCTAssertEqual(expiryUpdate.snapshot.alertState, .high)
+        XCTAssertEqual(expiryUpdate.notification?.kind, .repeatedHigh)
     }
 
     func testPowerSourceGateKeepsSamplingButClearsAlertOffBattery() {
@@ -752,7 +902,7 @@ final class MonitorEngineTests: XCTestCase {
             loadAverage: loadAverage,
             powerSource: powerSource,
             processSnapshots: processSnapshots,
-            at: date(for: sampleIndex, from: start),
+            at: date(for: sampleIndex, from: start, settings: settings),
             settings: settings
         )
     }
@@ -778,11 +928,29 @@ final class MonitorEngineTests: XCTestCase {
         start.addingTimeInterval(Double(sampleIndex) * MonitorEngine.sampleInterval)
     }
 
+    private func date(for sampleIndex: Int, from start: Date, settings: MonitorSettings) -> Date {
+        start.addingTimeInterval(Double(sampleIndex) * settings.sampleIntervalSeconds)
+    }
+
     private func processSnapshot(pid: pid_t, name: String, sampleIndex: Int, cpuPercent: Double) -> ProcessCPUSnapshot {
         ProcessCPUSnapshot(
             pid: pid,
             name: name,
             totalCPUTime: cumulativeCPUTime(sampleIndex: sampleIndex, cpuPercent: cpuPercent)
+        )
+    }
+
+    private func processSnapshot(
+        pid: pid_t,
+        name: String,
+        sampleIndex: Int,
+        cpuPercent: Double,
+        settings: MonitorSettings
+    ) -> ProcessCPUSnapshot {
+        ProcessCPUSnapshot(
+            pid: pid,
+            name: name,
+            totalCPUTime: cumulativeCPUTime(sampleIndex: sampleIndex, cpuPercent: cpuPercent, settings: settings)
         )
     }
 
@@ -792,6 +960,10 @@ final class MonitorEngineTests: XCTestCase {
 
     private func cumulativeCPUTime(sampleIndex: Int, cpuPercent: Double) -> UInt64 {
         UInt64(Double(sampleIndex) * MonitorEngine.sampleInterval * cpuPercent / 100 * 1_000_000_000)
+    }
+
+    private func cumulativeCPUTime(sampleIndex: Int, cpuPercent: Double, settings: MonitorSettings) -> UInt64 {
+        UInt64(Double(sampleIndex) * settings.sampleIntervalSeconds * cpuPercent / 100 * 1_000_000_000)
     }
 
     private func cumulativeCPUTime(
@@ -816,6 +988,172 @@ final class MonitorEngineTests: XCTestCase {
     }
 }
 
+@MainActor
+final class AppModelMonitoringStatusTests: XCTestCase {
+    func testMonitoringStatusRowsDuringColdStart() {
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: .empty,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(
+            rows,
+            [
+                MonitoringStatusRow(label: "Window:", value: "5 minutes"),
+                MonitoringStatusRow(label: "Process rule:", value: "Arms in 16 sample(s)"),
+                MonitoringStatusRow(label: "Load rule:", value: "Warms in 30 sample(s)"),
+                MonitoringStatusRow(label: "Alerts:", value: "Battery only")
+            ]
+        )
+    }
+
+    func testMonitoringStatusRowsDuringPartialWarmup() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = MonitorEngine.minimumProcessSampleCount
+        snapshot.isWarmingUp = true
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(
+            rows,
+            [
+                MonitoringStatusRow(label: "Window:", value: "5 minutes"),
+                MonitoringStatusRow(label: "Process rule:", value: "Live (> 100%)"),
+                MonitoringStatusRow(label: "Load rule:", value: "Warms in 14 sample(s)"),
+                MonitoringStatusRow(label: "Alerts:", value: "Battery only")
+            ]
+        )
+    }
+
+    func testMonitoringStatusRowsInLiveMode() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = MonitorEngine.minimumSampleCount
+        snapshot.isWarmingUp = false
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(
+            rows,
+            [
+                MonitoringStatusRow(label: "Window:", value: "5 minutes"),
+                MonitoringStatusRow(label: "Load rule:", value: "Adaptive baseline"),
+                MonitoringStatusRow(label: "Baseline:", value: "Slow rise / fast recovery"),
+                MonitoringStatusRow(label: "Process rule:", value: "5 minutes CPU average"),
+                MonitoringStatusRow(label: "Threshold:", value: "> 100%"),
+                MonitoringStatusRow(label: "Alerts:", value: "Battery only")
+            ]
+        )
+    }
+
+    func testMonitoringStatusRowsReflectThresholdChanges() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = MonitorEngine.minimumSampleCount
+        snapshot.isWarmingUp = false
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "175%"
+        )
+
+        XCTAssertEqual(rows.first(where: { $0.label == "Threshold:" })?.value, "> 175%")
+    }
+
+    func testMonitoringStatusRowsDoNotChangeWithPowerSource() {
+        var batterySnapshot = MonitorSnapshot.empty
+        batterySnapshot.sampleCount = MonitorEngine.minimumSampleCount
+        batterySnapshot.isWarmingUp = false
+        batterySnapshot.latestSample = LoadSample(
+            timestamp: Date(timeIntervalSince1970: 0),
+            loadAverage: 1.0,
+            powerSource: .battery
+        )
+
+        var acSnapshot = batterySnapshot
+        acSnapshot.latestSample = LoadSample(
+            timestamp: Date(timeIntervalSince1970: 0),
+            loadAverage: 1.0,
+            powerSource: .ac
+        )
+
+        let batteryRows = AppModel.makeMonitoringStatusRows(
+            snapshot: batterySnapshot,
+            processThresholdText: "100%"
+        )
+        let acRows = AppModel.makeMonitoringStatusRows(
+            snapshot: acSnapshot,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(batteryRows, acRows)
+        XCTAssertEqual(acRows.last, MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+    }
+
+    func testMonitoringStatusRowsReflectConfiguredWindows() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = 24
+        snapshot.isWarmingUp = false
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "100%",
+            loadWindowText: "10 minutes",
+            processWindowText: "2 minutes",
+            minimumLoadSampleCount: 24,
+            minimumProcessSampleCount: 13
+        )
+
+        XCTAssertEqual(rows.first?.value, "10 minutes")
+        XCTAssertEqual(rows.first(where: { $0.label == "Process rule:" })?.value, "2 minutes CPU average")
+    }
+
+    func testMuteButtonTitleReflectsConfiguredMuteDuration() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let store = MonitorSettingsStore(defaults: defaults)
+        var settings = MonitorSettings()
+        settings.launchAtLogin = false
+        settings.muteIntervalSeconds = 30 * 60
+        store.save(settings)
+
+        let model = AppModel(
+            loadProvider: StaticLoadProvider(value: nil),
+            powerProvider: StaticPowerProvider(),
+            processSnapshotProvider: StaticProcessSnapshotProvider(),
+            notificationCoordinator: TestNotificationCoordinator(),
+            settingsStore: store
+        )
+
+        XCTAssertEqual(model.muteButtonTitle, "Mute for 30 minutes")
+    }
+
+    func testUpdatingSampleIntervalReschedulesTimer() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let store = MonitorSettingsStore(defaults: defaults)
+        var settings = MonitorSettings()
+        settings.launchAtLogin = false
+        store.save(settings)
+
+        let model = AppModel(
+            loadProvider: StaticLoadProvider(value: nil),
+            powerProvider: StaticPowerProvider(),
+            processSnapshotProvider: StaticProcessSnapshotProvider(),
+            notificationCoordinator: TestNotificationCoordinator(),
+            settingsStore: store
+        )
+
+        XCTAssertEqual(model.activeTimerInterval, 20)
+        model.updateSampleIntervalSeconds(30)
+        XCTAssertEqual(model.activeTimerInterval, 30)
+    }
+}
+
 final class MonitorSettingsStoreTests: XCTestCase {
     func testStoreDefaultsIncludeProcessCPUThreshold() {
         let defaults = UserDefaults(suiteName: #function)!
@@ -825,6 +1163,11 @@ final class MonitorSettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.load().processCPUThresholdPercent, 100)
         XCTAssertEqual(store.load().baselineRiseFactor, 0.03, accuracy: 0.0001)
         XCTAssertEqual(store.load().baselineRecoveryFactor, 0.10, accuracy: 0.0001)
+        XCTAssertEqual(store.load().sampleIntervalSeconds, 20, accuracy: 0.0001)
+        XCTAssertEqual(store.load().loadWindowSeconds, 300, accuracy: 0.0001)
+        XCTAssertEqual(store.load().processWindowSeconds, 300, accuracy: 0.0001)
+        XCTAssertEqual(store.load().repeatIntervalSeconds, 300, accuracy: 0.0001)
+        XCTAssertEqual(store.load().muteIntervalSeconds, 1200, accuracy: 0.0001)
     }
 
     func testStorePersistsProcessCPUThreshold() {
@@ -860,6 +1203,11 @@ final class MonitorSettingsStoreTests: XCTestCase {
         XCTAssertFalse(decoded.launchAtLogin)
         XCTAssertEqual(decoded.baselineRiseFactor, 0.03, accuracy: 0.0001)
         XCTAssertEqual(decoded.baselineRecoveryFactor, 0.10, accuracy: 0.0001)
+        XCTAssertEqual(decoded.sampleIntervalSeconds, 20, accuracy: 0.0001)
+        XCTAssertEqual(decoded.loadWindowSeconds, 300, accuracy: 0.0001)
+        XCTAssertEqual(decoded.processWindowSeconds, 300, accuracy: 0.0001)
+        XCTAssertEqual(decoded.repeatIntervalSeconds, 300, accuracy: 0.0001)
+        XCTAssertEqual(decoded.muteIntervalSeconds, 1200, accuracy: 0.0001)
     }
 
     func testStoreNormalizesBaselineRecoveryNotBelowRise() {
@@ -876,4 +1224,58 @@ final class MonitorSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.baselineRiseFactor, 0.08, accuracy: 0.0001)
         XCTAssertEqual(loaded.baselineRecoveryFactor, 0.08, accuracy: 0.0001)
     }
+
+    func testStoreNormalizesTimingRangesAndRelationships() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let store = MonitorSettingsStore(defaults: defaults)
+        var settings = MonitorSettings()
+        settings.sampleIntervalSeconds = 7
+        settings.loadWindowSeconds = 30
+        settings.processWindowSeconds = 59
+        settings.repeatIntervalSeconds = 15
+        settings.muteIntervalSeconds = 61
+
+        store.save(settings)
+        let loaded = store.load()
+
+        XCTAssertEqual(loaded.sampleIntervalSeconds, 10, accuracy: 0.0001)
+        XCTAssertEqual(loaded.loadWindowSeconds, 120, accuracy: 0.0001)
+        XCTAssertEqual(loaded.processWindowSeconds, 120, accuracy: 0.0001)
+        XCTAssertEqual(loaded.repeatIntervalSeconds, 60, accuracy: 0.0001)
+        XCTAssertEqual(loaded.muteIntervalSeconds, 300, accuracy: 0.0001)
+    }
+}
+
+private struct StaticLoadProvider: LoadAverageProvider {
+    let value: Double?
+
+    func currentLoadAverage() -> Double? {
+        value
+    }
+}
+
+private struct StaticPowerProvider: PowerSourceProvider {
+    func currentPowerSource() -> PowerSource {
+        .battery
+    }
+}
+
+private struct StaticProcessSnapshotProvider: ProcessSnapshotProvider {
+    func currentProcessSnapshots() -> [ProcessCPUSnapshot] {
+        []
+    }
+}
+
+@MainActor
+private final class TestNotificationCoordinator: NotificationCoordinating {
+    func requestAuthorization() {}
+
+    func sendAlert(
+        for snapshot: MonitorSnapshot,
+        kind: NotificationKind,
+        soundEnabled: Bool,
+        loadWindowText: String,
+        processWindowText: String
+    ) {}
 }

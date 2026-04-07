@@ -3,58 +3,57 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Label(model.statusText, systemImage: model.statusSymbolName)
-                    .font(.headline)
-                    .foregroundStyle(model.snapshot.isElevated ? .red : .green)
-                Spacer()
-                Text("5m \(model.currentLoadText)")
-                    .font(.headline.monospacedDigit())
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Recent average", value: model.recentAverageText)
-                LabeledContent("Baseline", value: model.baselineText)
-                LabeledContent("Ratio", value: model.ratioText)
-                LabeledContent("Top process", value: model.topProcessNameText)
-                LabeledContent("PID", value: model.topProcessPIDText)
-                LabeledContent("5m CPU avg", value: model.topProcessCPUText)
-                LabeledContent("Trigger", value: model.triggerReasonText)
-                LabeledContent("Power", value: model.powerSourceText)
-                LabeledContent("Last alert", value: model.lastAlertText)
-            }
-            .font(.system(size: 12))
-
-            Text(model.warmupText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        Group {
+            Label("\(model.statusText)    \(model.loadWindowShortText) \(model.currentLoadText)", systemImage: model.statusSymbolName)
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 10) {
-                Button(model.muteButtonTitle) {
-                    model.toggleMute()
-                }
-                .disabled(!model.canToggleMute)
+            metricRow("Recent load average:", model.recentAverageText)
+            metricRow("Baseline load:", model.baselineText)
+            metricRow("Recent/Baseline Ratio:", model.ratioText)
+            metricRow("Top process name:", model.topProcessNameText)
+            metricRow("Top process PID:", model.topProcessPIDText)
+            metricRow("\(model.processWindowText) CPU avg:", model.topProcessCPUText)
+            metricRow("Warning Trigger:", model.triggerReasonText)
+            metricRow("Power source:", model.powerSourceText)
+            metricRow("Last alert:", model.lastAlertText)
+            
+            /*
+            Divider()
 
-                SettingsLink {
-                    Label("Settings", systemImage: "gearshape")
-                }
-
-                Button("Sample now") {
-                    model.sampleNow()
-                }
-
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
+            ForEach(model.monitoringStatusRows, id: \.label) { row in
+                metricRow(row.label, row.value)
             }
-            .buttonStyle(.plain)
+            */
+            
+            Divider()
+
+            Button(model.muteButtonTitle) {
+                model.toggleMute()
+            }
+            .disabled(!model.canToggleMute)
+
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: RadFlagSceneID.settings)
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
+            }
+
+            Button("Sample now") {
+                model.sampleNow()
+            }
+
+            Button("Quit") {
+                NSApplication.shared.terminate(nil)
+            }
         }
-        .padding(14)
-        .frame(width: 320)
+    }
+
+    private func metricRow(_ label: String, _ value: String) -> some View {
+        Text("\(label)  \(value)")
     }
 }

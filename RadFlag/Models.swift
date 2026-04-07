@@ -52,6 +52,11 @@ struct MonitorSettings: Codable, Equatable {
     var launchAtLogin: Bool = true
     var baselineRiseFactor: Double = 0.03
     var baselineRecoveryFactor: Double = 0.10
+    var sampleIntervalSeconds: Double = 20
+    var loadWindowSeconds: Double = 5 * 60
+    var processWindowSeconds: Double = 5 * 60
+    var repeatIntervalSeconds: Double = 5 * 60
+    var muteIntervalSeconds: Double = 20 * 60
 
     enum CodingKeys: String, CodingKey {
         case thresholdRatio
@@ -60,6 +65,24 @@ struct MonitorSettings: Codable, Equatable {
         case launchAtLogin
         case baselineRiseFactor
         case baselineRecoveryFactor
+        case sampleIntervalSeconds
+        case loadWindowSeconds
+        case processWindowSeconds
+        case repeatIntervalSeconds
+        case muteIntervalSeconds
+    }
+
+    private enum TimingRange {
+        static let sampleInterval = strideRange(10, 60, 5)
+        static let loadWindow = strideRange(2 * 60, 15 * 60, 60)
+        static let processWindow = strideRange(2 * 60, 15 * 60, 60)
+        static let repeatInterval = strideRange(60, 30 * 60, 60)
+        static let muteInterval = strideRange(5 * 60, 60 * 60, 5 * 60)
+
+        private static func strideRange(_ minimum: Double, _ maximum: Double, _ step: Double) -> ClosedRange<Double> {
+            _ = step
+            return minimum...maximum
+        }
     }
 
     init() {}
@@ -72,6 +95,12 @@ struct MonitorSettings: Codable, Equatable {
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
         baselineRiseFactor = try container.decodeIfPresent(Double.self, forKey: .baselineRiseFactor) ?? 0.03
         baselineRecoveryFactor = try container.decodeIfPresent(Double.self, forKey: .baselineRecoveryFactor) ?? 0.10
+        sampleIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .sampleIntervalSeconds) ?? 20
+        loadWindowSeconds = try container.decodeIfPresent(Double.self, forKey: .loadWindowSeconds) ?? 5 * 60
+        processWindowSeconds = try container.decodeIfPresent(Double.self, forKey: .processWindowSeconds) ?? 5 * 60
+        repeatIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .repeatIntervalSeconds) ?? 5 * 60
+        muteIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .muteIntervalSeconds) ?? 20 * 60
+        normalizeTiming()
         enforceBaselineFactorOrder()
     }
 
@@ -83,16 +112,49 @@ struct MonitorSettings: Codable, Equatable {
         try container.encode(launchAtLogin, forKey: .launchAtLogin)
         try container.encode(baselineRiseFactor, forKey: .baselineRiseFactor)
         try container.encode(baselineRecoveryFactor, forKey: .baselineRecoveryFactor)
+        try container.encode(sampleIntervalSeconds, forKey: .sampleIntervalSeconds)
+        try container.encode(loadWindowSeconds, forKey: .loadWindowSeconds)
+        try container.encode(processWindowSeconds, forKey: .processWindowSeconds)
+        try container.encode(repeatIntervalSeconds, forKey: .repeatIntervalSeconds)
+        try container.encode(muteIntervalSeconds, forKey: .muteIntervalSeconds)
     }
 
     mutating func enforceBaselineFactorOrder() {
         baselineRecoveryFactor = max(baselineRecoveryFactor, baselineRiseFactor)
     }
 
+    mutating func normalizeTiming() {
+        sampleIntervalSeconds = snapped(sampleIntervalSeconds, within: TimingRange.sampleInterval, step: 5)
+        loadWindowSeconds = max(
+            snapped(loadWindowSeconds, within: TimingRange.loadWindow, step: 60),
+            sampleIntervalSeconds
+        )
+        processWindowSeconds = max(
+            snapped(processWindowSeconds, within: TimingRange.processWindow, step: 60),
+            sampleIntervalSeconds
+        )
+        repeatIntervalSeconds = max(
+            snapped(repeatIntervalSeconds, within: TimingRange.repeatInterval, step: 60),
+            sampleIntervalSeconds
+        )
+        muteIntervalSeconds = max(
+            snapped(muteIntervalSeconds, within: TimingRange.muteInterval, step: 5 * 60),
+            sampleIntervalSeconds
+        )
+    }
+
     func normalized() -> MonitorSettings {
         var copy = self
+        copy.normalizeTiming()
         copy.enforceBaselineFactorOrder()
         return copy
+    }
+
+    private func snapped(_ value: Double, within range: ClosedRange<Double>, step: Double) -> Double {
+        let clamped = min(max(value, range.lowerBound), range.upperBound)
+        let snappedSteps = ((clamped - range.lowerBound) / step).rounded()
+        let snappedValue = range.lowerBound + snappedSteps * step
+        return min(max(snappedValue, range.lowerBound), range.upperBound)
     }
 }
 
@@ -188,6 +250,11 @@ struct MonitorSnapshot: Equatable {
     var isElevated: Bool {
         alertState.isElevated
     }
+}
+
+struct MonitoringStatusRow: Equatable {
+    let label: String
+    let value: String
 }
 
 struct MonitorUpdate: Equatable {

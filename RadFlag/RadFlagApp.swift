@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum RadFlagSceneID {
+    static let settings = "settings"
+}
+
 @main
 struct RadFlagApp: App {
     @StateObject private var model = AppModel()
@@ -10,9 +14,9 @@ struct RadFlagApp: App {
         } label: {
             Label(model.menuBarTitle, systemImage: model.statusSymbolName)
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
-        Settings {
+        Window("RadFlag Settings", id: RadFlagSceneID.settings) {
             SettingsView(model: model)
         }
     }
