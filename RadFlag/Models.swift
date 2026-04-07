@@ -190,6 +190,11 @@ struct MonitorSnapshot: Equatable {
     }
 }
 
+struct MonitoringStatusRow: Equatable {
+    let label: String
+    let value: String
+}
+
 struct MonitorUpdate: Equatable {
     let snapshot: MonitorSnapshot
     let notification: NotificationRequest?

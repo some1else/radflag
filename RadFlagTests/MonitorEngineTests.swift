@@ -816,6 +816,113 @@ final class MonitorEngineTests: XCTestCase {
     }
 }
 
+@MainActor
+final class AppModelMonitoringStatusTests: XCTestCase {
+    func testMonitoringStatusRowsDuringColdStart() {
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: .empty,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(
+            rows,
+            [
+                MonitoringStatusRow(label: "Window", value: "5 min"),
+                MonitoringStatusRow(label: "Process rule", value: "Arms in 16 sample(s)"),
+                MonitoringStatusRow(label: "Load rule", value: "Warms in 30 sample(s)"),
+                MonitoringStatusRow(label: "Alerts", value: "Battery only")
+            ]
+        )
+    }
+
+    func testMonitoringStatusRowsDuringPartialWarmup() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = MonitorEngine.minimumProcessSampleCount
+        snapshot.isWarmingUp = true
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(
+            rows,
+            [
+                MonitoringStatusRow(label: "Window", value: "5 min"),
+                MonitoringStatusRow(label: "Process rule", value: "Live (> 100%)"),
+                MonitoringStatusRow(label: "Load rule", value: "Warms in 14 sample(s)"),
+                MonitoringStatusRow(label: "Alerts", value: "Battery only")
+            ]
+        )
+    }
+
+    func testMonitoringStatusRowsInLiveMode() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = MonitorEngine.minimumSampleCount
+        snapshot.isWarmingUp = false
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(
+            rows,
+            [
+                MonitoringStatusRow(label: "Window", value: "5 min"),
+                MonitoringStatusRow(label: "Load rule", value: "Adaptive baseline"),
+                MonitoringStatusRow(label: "Baseline", value: "Slow rise / fast recovery"),
+                MonitoringStatusRow(label: "Process rule", value: "5m CPU average"),
+                MonitoringStatusRow(label: "Threshold", value: "> 100%"),
+                MonitoringStatusRow(label: "Alerts", value: "Battery only")
+            ]
+        )
+    }
+
+    func testMonitoringStatusRowsReflectThresholdChanges() {
+        var snapshot = MonitorSnapshot.empty
+        snapshot.sampleCount = MonitorEngine.minimumSampleCount
+        snapshot.isWarmingUp = false
+
+        let rows = AppModel.makeMonitoringStatusRows(
+            snapshot: snapshot,
+            processThresholdText: "175%"
+        )
+
+        XCTAssertEqual(rows.first(where: { $0.label == "Threshold" })?.value, "> 175%")
+    }
+
+    func testMonitoringStatusRowsDoNotChangeWithPowerSource() {
+        var batterySnapshot = MonitorSnapshot.empty
+        batterySnapshot.sampleCount = MonitorEngine.minimumSampleCount
+        batterySnapshot.isWarmingUp = false
+        batterySnapshot.latestSample = LoadSample(
+            timestamp: Date(timeIntervalSince1970: 0),
+            loadAverage: 1.0,
+            powerSource: .battery
+        )
+
+        var acSnapshot = batterySnapshot
+        acSnapshot.latestSample = LoadSample(
+            timestamp: Date(timeIntervalSince1970: 0),
+            loadAverage: 1.0,
+            powerSource: .ac
+        )
+
+        let batteryRows = AppModel.makeMonitoringStatusRows(
+            snapshot: batterySnapshot,
+            processThresholdText: "100%"
+        )
+        let acRows = AppModel.makeMonitoringStatusRows(
+            snapshot: acSnapshot,
+            processThresholdText: "100%"
+        )
+
+        XCTAssertEqual(batteryRows, acRows)
+        XCTAssertEqual(acRows.last, MonitoringStatusRow(label: "Alerts", value: "Battery only"))
+    }
+}
+
 final class MonitorSettingsStoreTests: XCTestCase {
     func testStoreDefaultsIncludeProcessCPUThreshold() {
         let defaults = UserDefaults(suiteName: #function)!

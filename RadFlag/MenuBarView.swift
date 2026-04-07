@@ -11,20 +11,24 @@ struct MenuBarView: View {
 
             Divider()
 
-            metricRow("Recent average", model.recentAverageText)
-            metricRow("Baseline", model.baselineText)
-            metricRow("Ratio", model.ratioText)
-            metricRow("Top process", model.topProcessNameText)
-            metricRow("PID", model.topProcessPIDText)
-            metricRow("5m CPU avg", model.topProcessCPUText)
-            metricRow("Trigger", model.triggerReasonText)
-            metricRow("Power", model.powerSourceText)
-            metricRow("Last alert", model.lastAlertText)
-
+            metricRow("Recent load average:", model.recentAverageText)
+            metricRow("Baseline load:", model.baselineText)
+            metricRow("Recent/Baseline Ratio:", model.ratioText)
+            metricRow("Top process name:", model.topProcessNameText)
+            metricRow("Top process PID:", model.topProcessPIDText)
+            metricRow("5m CPU load avg:", model.topProcessCPUText)
+            metricRow("Warning Trigger:", model.triggerReasonText)
+            metricRow("Power source:", model.powerSourceText)
+            metricRow("Last alert:", model.lastAlertText)
+            
+            /*
             Divider()
 
-            Text(model.warmupText)
-
+            ForEach(model.monitoringStatusRows, id: \.label) { row in
+                metricRow(row.label, row.value)
+            }
+            */
+            
             Divider()
 
             Button(model.muteButtonTitle) {

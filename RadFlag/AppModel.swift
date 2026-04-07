@@ -130,19 +130,59 @@ final class AppModel: ObservableObject {
         return false
     }
 
-    var warmupText: String {
+    var monitoringStatusRows: [MonitoringStatusRow] {
+        Self.makeMonitoringStatusRows(snapshot: snapshot, processThresholdText: processThresholdText)
+    }
+
+    static func makeMonitoringStatusRows(
+        snapshot: MonitorSnapshot,
+        processThresholdText: String
+    ) -> [MonitoringStatusRow] {
+        var rows = [MonitoringStatusRow(label: "Window:", value: "5 min")]
+
         guard snapshot.isWarmingUp else {
-            return "Monitoring the last 5 minutes against an adaptive baseline (gradual rise, faster recovery after spikes). Rogue-process detection uses a rolling 5-minute CPU window and alerts above \(processThresholdText)."
+            rows.append(MonitoringStatusRow(label: "Load rule:", value: "Adaptive baseline"))
+            rows.append(MonitoringStatusRow(label: "Baseline:", value: "Slow rise / fast recovery"))
+            rows.append(MonitoringStatusRow(label: "Process rule:", value: "5m CPU average"))
+            rows.append(MonitoringStatusRow(label: "Threshold:", value: "> \(processThresholdText)"))
+            rows.append(MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+            return rows
         }
 
         let remainingProcessSamples = max(0, MonitorEngine.minimumProcessSampleCount - snapshot.sampleCount)
         let remainingLoadSamples = max(0, MonitorEngine.minimumSampleCount - snapshot.sampleCount)
 
         if remainingProcessSamples > 0 {
-            return "Rogue-process detection arms in \(remainingProcessSamples) more sample(s); adaptive load baseline in \(remainingLoadSamples) more."
+            rows.append(
+                MonitoringStatusRow(
+                    label: "Process rule:",
+                    value: "Arms in \(remainingProcessSamples) sample(s)"
+                )
+            )
+            rows.append(
+                MonitoringStatusRow(
+                    label: "Load rule:",
+                    value: "Warms in \(remainingLoadSamples) sample(s)"
+                )
+            )
+            rows.append(MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+            return rows
         }
 
-        return "Rogue-process detection is live above \(processThresholdText). Adaptive load baseline warms for \(remainingLoadSamples) more sample(s)."
+        rows.append(
+            MonitoringStatusRow(
+                label: "Process rule:",
+                value: "Live (> \(processThresholdText))"
+            )
+        )
+        rows.append(
+            MonitoringStatusRow(
+                label: "Load rule:",
+                value: "Warms in \(remainingLoadSamples) sample(s)"
+            )
+        )
+        rows.append(MonitoringStatusRow(label: "Alerts:", value: "Battery only"))
+        return rows
     }
 
     func updateThresholdRatio(_ ratio: Double) {
