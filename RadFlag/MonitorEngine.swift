@@ -6,8 +6,8 @@ final class MonitorEngine {
     static let maxSamples = 120
     static let recentWindowSize = 15
     static let minimumSampleCount = 30
-    static let processWindowSize = 15
-    static let minimumProcessSampleCount = processWindowSize + 1
+    static let processWindowDuration: TimeInterval = 5 * 60
+    static let minimumProcessSampleCount = Int(processWindowDuration / sampleInterval) + 1
     static let clearRatio = 1.3
     static let minimumRecentAverage = 1.0
     static let repeatInterval: TimeInterval = 5 * 60
@@ -170,34 +170,22 @@ final class MonitorEngine {
         var nextHistories: [pid_t: ProcessHistory] = [:]
 
         for snapshot in snapshots where snapshot.pid > 0 {
-            var history = processHistories[snapshot.pid] ?? ProcessHistory(
-                name: snapshot.name,
-                lastTotalCPUTime: nil,
-                lastTimestamp: nil,
-                cpuSamples: []
-            )
+            var history = processHistories[snapshot.pid] ?? ProcessHistory(name: snapshot.name, observations: [])
             history.name = snapshot.name
 
-            if let lastTotalCPUTime = history.lastTotalCPUTime, let lastTimestamp = history.lastTimestamp {
-                let elapsed = date.timeIntervalSince(lastTimestamp)
-                if snapshot.totalCPUTime >= lastTotalCPUTime && elapsed > 0 {
-                    let delta = snapshot.totalCPUTime - lastTotalCPUTime
-                    history.cpuSamples.append(
-                        ProcessCPUSample(
-                            timestamp: date,
-                            cpuPercent: cpuPercent(deltaCPUTime: delta, elapsed: elapsed)
-                        )
-                    )
-                    if history.cpuSamples.count > Self.processWindowSize {
-                        history.cpuSamples.removeFirst(history.cpuSamples.count - Self.processWindowSize)
-                    }
-                } else if snapshot.totalCPUTime < lastTotalCPUTime {
-                    history.cpuSamples.removeAll()
+            if let lastObservation = history.observations.last {
+                if snapshot.totalCPUTime < lastObservation.totalCPUTime {
+                    history.observations.removeAll()
+                } else if date <= lastObservation.timestamp {
+                    nextHistories[snapshot.pid] = history
+                    continue
                 }
             }
 
-            history.lastTotalCPUTime = snapshot.totalCPUTime
-            history.lastTimestamp = date
+            history.observations.append(
+                ProcessCPUObservation(timestamp: date, totalCPUTime: snapshot.totalCPUTime)
+            )
+            pruneObservations(&history.observations, latestTimestamp: date)
             nextHistories[snapshot.pid] = history
         }
 
@@ -208,11 +196,10 @@ final class MonitorEngine {
     private func topProcess(in histories: [pid_t: ProcessHistory]) -> ProcessOffender? {
         histories.reduce(into: nil as ProcessOffender?) { best, entry in
             let (pid, history) = entry
-            guard history.cpuSamples.count >= Self.processWindowSize else {
+            guard let averageCPUPercent = averageCPUPercent(for: history) else {
                 return
             }
 
-            let averageCPUPercent = history.cpuSamples.reduce(0) { $0 + $1.cpuPercent } / Double(history.cpuSamples.count)
             if best == nil || averageCPUPercent > best!.averageCPUPercent {
                 best = ProcessOffender(pid: pid, name: history.name, averageCPUPercent: averageCPUPercent)
             }
@@ -237,6 +224,45 @@ final class MonitorEngine {
 
         let total = samples.reduce(0) { $0 + $1.loadAverage }
         return total / Double(samples.count)
+    }
+
+    private func averageCPUPercent(for history: ProcessHistory) -> Double? {
+        guard
+            let latestObservation = history.observations.last,
+            let anchorObservation = anchorObservation(in: history.observations, latestTimestamp: latestObservation.timestamp)
+        else {
+            return nil
+        }
+
+        let elapsed = latestObservation.timestamp.timeIntervalSince(anchorObservation.timestamp)
+        guard
+            elapsed >= Self.processWindowDuration,
+            latestObservation.totalCPUTime >= anchorObservation.totalCPUTime
+        else {
+            return nil
+        }
+
+        let delta = latestObservation.totalCPUTime - anchorObservation.totalCPUTime
+        return cpuPercent(deltaCPUTime: delta, elapsed: elapsed)
+    }
+
+    private func anchorObservation(
+        in observations: [ProcessCPUObservation],
+        latestTimestamp: Date
+    ) -> ProcessCPUObservation? {
+        let cutoffTimestamp = latestTimestamp.addingTimeInterval(-Self.processWindowDuration)
+        return observations.last { $0.timestamp <= cutoffTimestamp }
+    }
+
+    private func pruneObservations(_ observations: inout [ProcessCPUObservation], latestTimestamp: Date) {
+        let cutoffTimestamp = latestTimestamp.addingTimeInterval(-Self.processWindowDuration)
+        guard let lastBeforeWindowIndex = observations.lastIndex(where: { $0.timestamp < cutoffTimestamp }) else {
+            return
+        }
+
+        if lastBeforeWindowIndex > 0 {
+            observations.removeFirst(lastBeforeWindowIndex)
+        }
     }
 
     private func cpuPercent(deltaCPUTime: UInt64, elapsed: TimeInterval) -> Double {
@@ -275,7 +301,5 @@ private struct LoadMetrics {
 
 private struct ProcessHistory {
     var name: String
-    var lastTotalCPUTime: UInt64?
-    var lastTimestamp: Date?
-    var cpuSamples: [ProcessCPUSample]
+    var observations: [ProcessCPUObservation]
 }

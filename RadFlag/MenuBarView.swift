@@ -21,7 +21,7 @@ struct MenuBarView: View {
                 LabeledContent("Ratio", value: model.ratioText)
                 LabeledContent("Top process", value: model.topProcessNameText)
                 LabeledContent("PID", value: model.topProcessPIDText)
-                LabeledContent("CPU avg", value: model.topProcessCPUText)
+                LabeledContent("5m CPU avg", value: model.topProcessCPUText)
                 LabeledContent("Trigger", value: model.triggerReasonText)
                 LabeledContent("Power", value: model.powerSourceText)
                 LabeledContent("Last alert", value: model.lastAlertText)

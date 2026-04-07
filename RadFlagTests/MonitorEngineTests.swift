@@ -154,6 +154,89 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertEqual(triggerUpdate.notification?.kind, .enteredHigh)
     }
 
+    func testWholeWindowDeltaMathReportsConstantFiveMinuteAverage() throws {
+        let engine = MonitorEngine()
+        let settings = MonitorSettings()
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 5050
+        var lastUpdate: MonitorUpdate?
+
+        for sampleIndex in 0..<MonitorEngine.minimumProcessSampleCount {
+            lastUpdate = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [processSnapshot(pid: pid, name: "Renderer", sampleIndex: sampleIndex, cpuPercent: 50)],
+                start: start,
+                settings: settings
+            )
+        }
+
+        XCTAssertEqual(try XCTUnwrap(lastUpdate?.snapshot.topProcess?.averageCPUPercent), 50, accuracy: 0.0001)
+        XCTAssertNil(lastUpdate?.snapshot.processOffender)
+    }
+
+    func testWholeWindowDeltaMathUsesElapsedTimeForIrregularIntervals() throws {
+        let engine = MonitorEngine()
+        let settings = MonitorSettings()
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 5151
+        let offsets: [TimeInterval] = [0, 10, 70, 130, 190, 250, 310]
+        let intervalCPUPercentages: [Double] = [10, 90, 10, 90, 10, 90]
+        var lastUpdate: MonitorUpdate?
+
+        for (index, offset) in offsets.enumerated() {
+            lastUpdate = sampleAt(
+                engine,
+                at: start.addingTimeInterval(offset),
+                loadAverage: 1.0,
+                processSnapshots: [
+                    processSnapshot(
+                        pid: pid,
+                        name: "TypeScript Server",
+                        totalCPUTime: cumulativeCPUTime(
+                            offsets: offsets,
+                            cpuPercentages: intervalCPUPercentages,
+                            throughObservation: index
+                        )
+                    )
+                ],
+                settings: settings
+            )
+        }
+
+        XCTAssertEqual(try XCTUnwrap(lastUpdate?.snapshot.topProcess?.averageCPUPercent), 58.0, accuracy: 0.001)
+        XCTAssertNil(lastUpdate?.snapshot.processOffender)
+    }
+
+    func testProcessWarmupRequiresFiveMinutesOfElapsedTimeNotJustSampleCount() {
+        let engine = MonitorEngine()
+        let settings = MonitorSettings()
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 6262
+        var lastUpdate: MonitorUpdate?
+
+        for sampleIndex in 0..<MonitorEngine.minimumProcessSampleCount {
+            lastUpdate = sampleAt(
+                engine,
+                at: start.addingTimeInterval(Double(sampleIndex) * 10),
+                loadAverage: 1.0,
+                processSnapshots: [
+                    processSnapshot(
+                        pid: pid,
+                        name: "Code Helper",
+                        totalCPUTime: UInt64(Double(sampleIndex) * 10 * 1.5 * 1_000_000_000)
+                    )
+                ],
+                settings: settings
+            )
+        }
+
+        XCTAssertNil(lastUpdate?.snapshot.topProcess)
+        XCTAssertNil(lastUpdate?.snapshot.processOffender)
+        XCTAssertEqual(lastUpdate?.snapshot.alertState, .ok)
+    }
+
     func testTopProcessAppearsBeforeCrossingConfiguredThreshold() throws {
         let engine = MonitorEngine()
         var settings = MonitorSettings()
@@ -309,6 +392,38 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertNil(clearedUpdate.snapshot.triggerReason)
         XCTAssertNil(clearedUpdate.snapshot.topProcess)
         XCTAssertNil(clearedUpdate.snapshot.processOffender)
+    }
+
+    func testProcessHistoryResetsWhenCumulativeCPUTimeGoesBackwards() {
+        let engine = MonitorEngine()
+        let settings = MonitorSettings()
+        let start = Date(timeIntervalSince1970: 0)
+        let pid: pid_t = 7171
+
+        for sampleIndex in 0..<MonitorEngine.minimumProcessSampleCount {
+            _ = sample(
+                engine,
+                sampleIndex: sampleIndex,
+                loadAverage: 1.0,
+                processSnapshots: [processSnapshot(pid: pid, name: "Renderer", sampleIndex: sampleIndex, cpuPercent: 160)],
+                start: start,
+                settings: settings
+            )
+        }
+
+        XCTAssertEqual(engine.snapshot.processOffender?.pid, pid)
+
+        let resetUpdate = sampleAt(
+            engine,
+            at: start.addingTimeInterval(Double(MonitorEngine.minimumProcessSampleCount) * MonitorEngine.sampleInterval),
+            loadAverage: 1.0,
+            processSnapshots: [processSnapshot(pid: pid, name: "Renderer", totalCPUTime: 1)],
+            settings: settings
+        )
+
+        XCTAssertNil(resetUpdate.snapshot.topProcess)
+        XCTAssertNil(resetUpdate.snapshot.processOffender)
+        XCTAssertEqual(resetUpdate.snapshot.alertState, .ok)
     }
 
     func testHighStaysWhileEitherRuleIsStillActive() {
@@ -510,6 +625,23 @@ final class MonitorEngineTests: XCTestCase {
         )
     }
 
+    private func sampleAt(
+        _ engine: MonitorEngine,
+        at date: Date,
+        loadAverage: Double,
+        powerSource: PowerSource = .battery,
+        processSnapshots: [ProcessCPUSnapshot],
+        settings: MonitorSettings
+    ) -> MonitorUpdate {
+        engine.processSample(
+            loadAverage: loadAverage,
+            powerSource: powerSource,
+            processSnapshots: processSnapshots,
+            at: date,
+            settings: settings
+        )
+    }
+
     private func date(for sampleIndex: Int, from start: Date) -> Date {
         start.addingTimeInterval(Double(sampleIndex) * MonitorEngine.sampleInterval)
     }
@@ -522,8 +654,33 @@ final class MonitorEngineTests: XCTestCase {
         )
     }
 
+    private func processSnapshot(pid: pid_t, name: String, totalCPUTime: UInt64) -> ProcessCPUSnapshot {
+        ProcessCPUSnapshot(pid: pid, name: name, totalCPUTime: totalCPUTime)
+    }
+
     private func cumulativeCPUTime(sampleIndex: Int, cpuPercent: Double) -> UInt64 {
         UInt64(Double(sampleIndex) * MonitorEngine.sampleInterval * cpuPercent / 100 * 1_000_000_000)
+    }
+
+    private func cumulativeCPUTime(
+        offsets: [TimeInterval],
+        cpuPercentages: [Double],
+        throughObservation observationIndex: Int
+    ) -> UInt64 {
+        guard observationIndex > 0 else {
+            return 0
+        }
+
+        let cpuTime = zip(offsets.dropFirst().prefix(observationIndex), cpuPercentages.prefix(observationIndex))
+            .enumerated()
+            .reduce(0.0) { partialResult, element in
+                let (index, (endOffset, cpuPercent)) = element
+                let startOffset = offsets[index]
+                let elapsed = endOffset - startOffset
+                return partialResult + (elapsed * cpuPercent / 100)
+            }
+
+        return UInt64(cpuTime * 1_000_000_000)
     }
 }
 

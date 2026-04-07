@@ -30,9 +30,9 @@ struct ProcessCPUSnapshot: Equatable {
     let totalCPUTime: UInt64
 }
 
-struct ProcessCPUSample: Equatable {
+struct ProcessCPUObservation: Equatable {
     let timestamp: Date
-    let cpuPercent: Double
+    let totalCPUTime: UInt64
 }
 
 struct ProcessOffender: Equatable {
