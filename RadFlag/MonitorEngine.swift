@@ -3,7 +3,6 @@ import Foundation
 
 final class MonitorEngine {
     static let sampleInterval: TimeInterval = 20
-    static let maxSamples = 120
     static let recentWindowSize = 15
     static let minimumSampleCount = 30
     static let processWindowDuration: TimeInterval = 5 * 60
@@ -30,12 +29,18 @@ final class MonitorEngine {
         let normalizedSettings = settings.normalized()
         let sample = LoadSample(timestamp: date, loadAverage: loadAverage, powerSource: powerSource)
         samples.append(sample)
-        if samples.count > Self.maxSamples {
-            samples.removeFirst(samples.count - Self.maxSamples)
+
+        let maxSamples = Self.maxSamples(for: normalizedSettings)
+        if samples.count > maxSamples {
+            samples.removeFirst(samples.count - maxSamples)
         }
 
         let loadMetrics = buildLoadMetrics(settings: normalizedSettings)
-        let topProcess = updateProcessHistories(with: processSnapshots, at: date)
+        let topProcess = updateProcessHistories(
+            with: processSnapshots,
+            at: date,
+            processWindowDuration: normalizedSettings.processWindowSeconds
+        )
         let processOffender = processOffender(from: topProcess, settings: normalizedSettings)
         let update = updateState(
             using: loadMetrics,
@@ -49,12 +54,13 @@ final class MonitorEngine {
     }
 
     @discardableResult
-    func muteForOneHour(at date: Date = Date()) -> MonitorSnapshot {
+    func mute(using settings: MonitorSettings, at date: Date = Date()) -> MonitorSnapshot {
         guard snapshot.isElevated else {
             return snapshot
         }
 
-        snapshot.alertState = .muted(until: date.addingTimeInterval(Self.muteInterval))
+        let normalizedSettings = settings.normalized()
+        snapshot.alertState = .muted(until: date.addingTimeInterval(normalizedSettings.muteIntervalSeconds))
         return snapshot
     }
 
@@ -100,14 +106,22 @@ final class MonitorEngine {
                 lastAlertDate = date
                 notification = NotificationRequest(kind: .enteredHigh, timestamp: date)
             case .high:
-                if shouldSendRepeatNotification(now: date, lastAlertDate: lastAlertDate) {
+                if shouldSendRepeatNotification(
+                    now: date,
+                    lastAlertDate: lastAlertDate,
+                    repeatInterval: settings.repeatIntervalSeconds
+                ) {
                     lastAlertDate = date
                     notification = NotificationRequest(kind: .repeatedHigh, timestamp: date)
                 }
             case let .muted(until):
                 if date >= until {
                     nextAlertState = .high
-                    if shouldSendRepeatNotification(now: date, lastAlertDate: lastAlertDate) {
+                    if shouldSendRepeatNotification(
+                        now: date,
+                        lastAlertDate: lastAlertDate,
+                        repeatInterval: settings.repeatIntervalSeconds
+                    ) {
                         lastAlertDate = date
                         notification = NotificationRequest(kind: .repeatedHigh, timestamp: date)
                     }
@@ -136,9 +150,10 @@ final class MonitorEngine {
 
     private func buildLoadMetrics(settings: MonitorSettings) -> LoadMetrics {
         let latestSample = samples.last
-        let recentSamples = Array(samples.suffix(Self.recentWindowSize))
+        let recentWindowSize = Self.recentWindowSize(for: settings)
+        let recentSamples = Array(samples.suffix(recentWindowSize))
 
-        let recentAverage = recentSamples.count == Self.recentWindowSize ? average(for: recentSamples) : nil
+        let recentAverage = recentSamples.count == recentWindowSize ? average(for: recentSamples) : nil
         let baselineAverage = updateAdaptiveBaseline(using: recentAverage, settings: settings)
         let ratio = baselineAverage.map { baseline -> Double in
             guard let recentAverage else {
@@ -147,8 +162,8 @@ final class MonitorEngine {
             return recentAverage / max(baseline, Self.baselineFloor)
         }
 
-        let canEvaluate = samples.count >= Self.minimumSampleCount
-            && recentSamples.count == Self.recentWindowSize
+        let canEvaluate = samples.count >= Self.minimumSampleCount(for: settings)
+            && recentSamples.count == recentWindowSize
             && baselineAverage != nil
             && ratio != nil
 
@@ -181,12 +196,21 @@ final class MonitorEngine {
         return nextBaseline
     }
 
-    private func updateProcessHistories(with snapshots: [ProcessCPUSnapshot], at date: Date) -> ProcessOffender? {
+    private func updateProcessHistories(
+        with snapshots: [ProcessCPUSnapshot],
+        at date: Date,
+        processWindowDuration: TimeInterval
+    ) -> ProcessOffender? {
         var nextHistories: [pid_t: ProcessHistory] = [:]
 
         for snapshot in snapshots where snapshot.pid > 0 {
-            var history = processHistories[snapshot.pid] ?? ProcessHistory(name: snapshot.name, observations: [])
+            var history = processHistories[snapshot.pid] ?? ProcessHistory(
+                name: snapshot.name,
+                observations: [],
+                processWindowDuration: processWindowDuration
+            )
             history.name = snapshot.name
+            history.processWindowDuration = processWindowDuration
 
             if let lastObservation = history.observations.last {
                 if snapshot.totalCPUTime < lastObservation.totalCPUTime {
@@ -200,7 +224,11 @@ final class MonitorEngine {
             history.observations.append(
                 ProcessCPUObservation(timestamp: date, totalCPUTime: snapshot.totalCPUTime)
             )
-            pruneObservations(&history.observations, latestTimestamp: date)
+            pruneObservations(
+                &history.observations,
+                latestTimestamp: date,
+                processWindowDuration: processWindowDuration
+            )
             nextHistories[snapshot.pid] = history
         }
 
@@ -244,14 +272,18 @@ final class MonitorEngine {
     private func averageCPUPercent(for history: ProcessHistory) -> Double? {
         guard
             let latestObservation = history.observations.last,
-            let anchorObservation = anchorObservation(in: history.observations, latestTimestamp: latestObservation.timestamp)
+            let anchorObservation = anchorObservation(
+                in: history.observations,
+                latestTimestamp: latestObservation.timestamp,
+                processWindowDuration: history.processWindowDuration
+            )
         else {
             return nil
         }
 
         let elapsed = latestObservation.timestamp.timeIntervalSince(anchorObservation.timestamp)
         guard
-            elapsed >= Self.processWindowDuration,
+            elapsed >= history.processWindowDuration,
             latestObservation.totalCPUTime >= anchorObservation.totalCPUTime
         else {
             return nil
@@ -263,14 +295,19 @@ final class MonitorEngine {
 
     private func anchorObservation(
         in observations: [ProcessCPUObservation],
-        latestTimestamp: Date
+        latestTimestamp: Date,
+        processWindowDuration: TimeInterval
     ) -> ProcessCPUObservation? {
-        let cutoffTimestamp = latestTimestamp.addingTimeInterval(-Self.processWindowDuration)
+        let cutoffTimestamp = latestTimestamp.addingTimeInterval(-processWindowDuration)
         return observations.last { $0.timestamp <= cutoffTimestamp }
     }
 
-    private func pruneObservations(_ observations: inout [ProcessCPUObservation], latestTimestamp: Date) {
-        let cutoffTimestamp = latestTimestamp.addingTimeInterval(-Self.processWindowDuration)
+    private func pruneObservations(
+        _ observations: inout [ProcessCPUObservation],
+        latestTimestamp: Date,
+        processWindowDuration: TimeInterval
+    ) {
+        let cutoffTimestamp = latestTimestamp.addingTimeInterval(-processWindowDuration)
         guard let lastBeforeWindowIndex = observations.lastIndex(where: { $0.timestamp < cutoffTimestamp }) else {
             return
         }
@@ -284,11 +321,31 @@ final class MonitorEngine {
         (Double(deltaCPUTime) / Self.nanosecondsPerSecond) / elapsed * 100
     }
 
-    private func shouldSendRepeatNotification(now: Date, lastAlertDate: Date?) -> Bool {
+    private func shouldSendRepeatNotification(
+        now: Date,
+        lastAlertDate: Date?,
+        repeatInterval: TimeInterval
+    ) -> Bool {
         guard let lastAlertDate else {
             return true
         }
-        return now.timeIntervalSince(lastAlertDate) >= Self.repeatInterval
+        return now.timeIntervalSince(lastAlertDate) >= repeatInterval
+    }
+
+    static func recentWindowSize(for settings: MonitorSettings) -> Int {
+        max(1, Int(ceil(settings.loadWindowSeconds / settings.sampleIntervalSeconds)))
+    }
+
+    static func minimumSampleCount(for settings: MonitorSettings) -> Int {
+        recentWindowSize(for: settings) * 2
+    }
+
+    static func minimumProcessSampleCount(for settings: MonitorSettings) -> Int {
+        max(2, Int(ceil(settings.processWindowSeconds / settings.sampleIntervalSeconds)) + 1)
+    }
+
+    static func maxSamples(for settings: MonitorSettings) -> Int {
+        max(recentWindowSize(for: settings) * 8, minimumProcessSampleCount(for: settings) + 1)
     }
 }
 
@@ -317,4 +374,5 @@ private struct LoadMetrics {
 private struct ProcessHistory {
     var name: String
     var observations: [ProcessCPUObservation]
+    var processWindowDuration: TimeInterval
 }

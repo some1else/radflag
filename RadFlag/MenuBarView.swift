@@ -7,7 +7,7 @@ struct MenuBarView: View {
 
     var body: some View {
         Group {
-            Label("\(model.statusText)    5m \(model.currentLoadText)", systemImage: model.statusSymbolName)
+            Label("\(model.statusText)    \(model.loadWindowShortText) \(model.currentLoadText)", systemImage: model.statusSymbolName)
 
             Divider()
 
@@ -16,7 +16,7 @@ struct MenuBarView: View {
             metricRow("Recent/Baseline Ratio:", model.ratioText)
             metricRow("Top process name:", model.topProcessNameText)
             metricRow("Top process PID:", model.topProcessPIDText)
-            metricRow("5m CPU load avg:", model.topProcessCPUText)
+            metricRow("\(model.processWindowText) CPU avg:", model.topProcessCPUText)
             metricRow("Warning Trigger:", model.triggerReasonText)
             metricRow("Power source:", model.powerSourceText)
             metricRow("Last alert:", model.lastAlertText)

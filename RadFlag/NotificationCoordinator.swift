@@ -4,7 +4,13 @@ import UserNotifications
 @MainActor
 protocol NotificationCoordinating {
     func requestAuthorization()
-    func sendAlert(for snapshot: MonitorSnapshot, kind: NotificationKind, soundEnabled: Bool)
+    func sendAlert(
+        for snapshot: MonitorSnapshot,
+        kind: NotificationKind,
+        soundEnabled: Bool,
+        loadWindowText: String,
+        processWindowText: String
+    )
 }
 
 @MainActor
@@ -20,14 +26,25 @@ final class NotificationCoordinator: NotificationCoordinating {
         }
     }
 
-    func sendAlert(for snapshot: MonitorSnapshot, kind: NotificationKind, soundEnabled: Bool) {
+    func sendAlert(
+        for snapshot: MonitorSnapshot,
+        kind: NotificationKind,
+        soundEnabled: Bool,
+        loadWindowText: String,
+        processWindowText: String
+    ) {
         guard let triggerReason = snapshot.triggerReason else {
             return
         }
 
         let content = UNMutableNotificationContent()
-        content.title = title(for: triggerReason, kind: kind)
-        content.body = body(for: snapshot, triggerReason: triggerReason)
+        content.title = title(for: triggerReason, kind: kind, loadWindowText: loadWindowText)
+        content.body = body(
+            for: snapshot,
+            triggerReason: triggerReason,
+            loadWindowText: loadWindowText,
+            processWindowText: processWindowText
+        )
         content.sound = soundEnabled ? .default : nil
 
         let request = UNNotificationRequest(
@@ -40,10 +57,10 @@ final class NotificationCoordinator: NotificationCoordinating {
         }
     }
 
-    private func title(for triggerReason: AlertTriggerReason, kind: NotificationKind) -> String {
+    private func title(for triggerReason: AlertTriggerReason, kind: NotificationKind, loadWindowText: String) -> String {
         switch (triggerReason, kind) {
         case (.load, .enteredHigh):
-            return "RadFlag: high 5-minute load on battery"
+            return "RadFlag: high \(loadWindowText) load on battery"
         case (.load, .repeatedHigh):
             return "RadFlag: load still high on battery"
         case (.process, .enteredHigh):
@@ -57,7 +74,12 @@ final class NotificationCoordinator: NotificationCoordinating {
         }
     }
 
-    private func body(for snapshot: MonitorSnapshot, triggerReason: AlertTriggerReason) -> String {
+    private func body(
+        for snapshot: MonitorSnapshot,
+        triggerReason: AlertTriggerReason,
+        loadWindowText: String,
+        processWindowText: String
+    ) -> String {
         var segments: [String] = []
 
         if triggerReason == .load || triggerReason == .loadAndProcess {
@@ -68,7 +90,7 @@ final class NotificationCoordinator: NotificationCoordinating {
             {
                 segments.append(
                     String(
-                        format: "5m load %.2f vs baseline %.2f (%.2fx).",
+                        format: "\(loadWindowText) load %.2f vs baseline %.2f (%.2fx).",
                         recentAverage,
                         baselineAverage,
                         ratio
@@ -83,7 +105,7 @@ final class NotificationCoordinator: NotificationCoordinating {
         {
             segments.append(
                 String(
-                    format: "%@ (pid %d) averaged %.0f%% CPU over the last 5 minutes.",
+                    format: "%@ (pid %d) averaged %.0f%% CPU over the last \(processWindowText).",
                     processOffender.name,
                     Int32(processOffender.pid),
                     processOffender.averageCPUPercent
