@@ -6,69 +6,50 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Label(model.statusText, systemImage: model.statusSymbolName)
-                    .font(.headline)
-                    .foregroundStyle(model.snapshot.isElevated ? .red : .green)
-                Spacer()
-                Text("5m \(model.currentLoadText)")
-                    .font(.headline.monospacedDigit())
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Recent average", value: model.recentAverageText)
-                LabeledContent("Baseline", value: model.baselineText)
-                LabeledContent("Ratio", value: model.ratioText)
-                HStack(alignment: .top, spacing: 8) {
-                    Text("Top process")
-                    Spacer(minLength: 8)
-                    Text(model.topProcessNameText)
-                        .multilineTextAlignment(.trailing)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                LabeledContent("PID", value: model.topProcessPIDText)
-                LabeledContent("5m CPU avg", value: model.topProcessCPUText)
-                LabeledContent("Trigger", value: model.triggerReasonText)
-                LabeledContent("Power", value: model.powerSourceText)
-                LabeledContent("Last alert", value: model.lastAlertText)
-            }
-            .font(.system(size: 12))
-
-            Text(model.warmupText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            Label("\(model.statusText)    5m \(model.currentLoadText)", systemImage: model.statusSymbolName)
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 10) {
-                Button(model.muteButtonTitle) {
-                    model.toggleMute()
-                }
-                .disabled(!model.canToggleMute)
+            metricRow("Recent average", model.recentAverageText)
+            metricRow("Baseline", model.baselineText)
+            metricRow("Ratio", model.ratioText)
+            metricRow("Top process", model.topProcessNameText)
+            metricRow("PID", model.topProcessPIDText)
+            metricRow("5m CPU avg", model.topProcessCPUText)
+            metricRow("Trigger", model.triggerReasonText)
+            metricRow("Power", model.powerSourceText)
+            metricRow("Last alert", model.lastAlertText)
 
-                Button {
-                    NSApp.activate(ignoringOtherApps: true)
-                    openWindow(id: RadFlagSceneID.settings)
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
-                }
+            Divider()
 
-                Button("Sample now") {
-                    model.sampleNow()
-                }
+            Text(model.warmupText)
 
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
+            Divider()
+
+            Button(model.muteButtonTitle) {
+                model.toggleMute()
             }
-            .buttonStyle(.plain)
+            .disabled(!model.canToggleMute)
+
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: RadFlagSceneID.settings)
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
+            }
+
+            Button("Sample now") {
+                model.sampleNow()
+            }
+
+            Button("Quit") {
+                NSApplication.shared.terminate(nil)
+            }
         }
-        .padding(14)
-        .frame(width: 320)
+    }
+
+    private func metricRow(_ label: String, _ value: String) -> some View {
+        Text("\(label)  \(value)")
     }
 }

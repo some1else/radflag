@@ -14,7 +14,7 @@ struct RadFlagApp: App {
         } label: {
             Label(model.menuBarTitle, systemImage: model.statusSymbolName)
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
         Window("RadFlag Settings", id: RadFlagSceneID.settings) {
             SettingsView(model: model)
