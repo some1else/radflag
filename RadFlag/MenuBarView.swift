@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -19,7 +20,14 @@ struct MenuBarView: View {
                 LabeledContent("Recent average", value: model.recentAverageText)
                 LabeledContent("Baseline", value: model.baselineText)
                 LabeledContent("Ratio", value: model.ratioText)
-                LabeledContent("Top process", value: model.topProcessNameText)
+                HStack(alignment: .top, spacing: 8) {
+                    Text("Top process")
+                    Spacer(minLength: 8)
+                    Text(model.topProcessNameText)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
                 LabeledContent("PID", value: model.topProcessPIDText)
                 LabeledContent("5m CPU avg", value: model.topProcessCPUText)
                 LabeledContent("Trigger", value: model.triggerReasonText)
@@ -31,6 +39,9 @@ struct MenuBarView: View {
             Text(model.warmupText)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Divider()
 

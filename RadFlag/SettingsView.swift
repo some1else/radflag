@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -23,10 +24,9 @@ struct SettingsView: View {
                         step: 0.05
                     )
 
-                    Text("Load alerts fire when the recent 5-minute average is at least this multiple of the baseline.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    SettingsDescriptionText("Load alerts fire when the recent 5-minute average is at least this multiple of the baseline.")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -45,10 +45,9 @@ struct SettingsView: View {
                         step: 10
                     )
 
-                    Text("Process alerts fire when the top 5-minute-average process stays above this CPU level.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    SettingsDescriptionText("Process alerts fire when the top 5-minute-average process stays above this CPU level.")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section("Adaptive Baseline") {
@@ -69,10 +68,9 @@ struct SettingsView: View {
                         step: 0.01
                     )
 
-                    Text("Higher values make the baseline climb faster when load stays elevated.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    SettingsDescriptionText("Higher values make the baseline climb faster when load stays elevated.")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -91,10 +89,9 @@ struct SettingsView: View {
                         step: 0.01
                     )
 
-                    Text("Higher values make the baseline fall faster after spikes; recovery is intentionally kept at least as fast as rise.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    SettingsDescriptionText("Higher values make the baseline fall faster after spikes; recovery is intentionally kept at least as fast as rise.")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section("Behavior") {
@@ -114,24 +111,53 @@ struct SettingsView: View {
                     )
                 )
 
-                Text("Launch at login status: \(model.launchAtLoginStatus)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                SettingsDescriptionText("Launch at login status: \(model.launchAtLoginStatus)")
 
                 if let launchAtLoginError = model.launchAtLoginError {
-                    Text("Could not update login item: \(launchAtLoginError)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    SettingsDescriptionText("Could not update login item: \(launchAtLoginError)")
                 }
             }
 
             Section("Timing") {
-                Text("Checks run every 20 seconds, process alerts evaluate a rolling 5-minute CPU window, repeated alerts are capped at every 5 minutes, and muting lasts 20 minutes.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                SettingsDescriptionText("Checks run every 20 seconds, process alerts evaluate a rolling 5-minute CPU window, repeated alerts are capped at every 5 minutes, and muting lasts 20 minutes.")
             }
         }
+        .background(SettingsWindowFocusAccessor())
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+private struct SettingsDescriptionText: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SettingsWindowFocusAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        FocusNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class FocusNSView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in
+            self?.window?.makeKeyAndOrderFront(nil)
+        }
     }
 }
